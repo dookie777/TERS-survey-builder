@@ -5108,7 +5108,9 @@ function renderPage() {
       </div>
     </div>\`;
 
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  var sc = document.querySelector('.scroll-container');
+  if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
+  else window.scrollTo({ top: 0, behavior: 'smooth' });
   requestAnimationFrame(() => { requestAnimationFrame(() => {
     calcScaleWidth();
     calcMatrixWidth();
