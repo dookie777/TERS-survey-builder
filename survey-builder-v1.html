@@ -4163,7 +4163,7 @@
     });
   }
 
-  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwkDHq31Q5ibih5fJhE_Q9vwd_zcoz25TJ34NyPpowphvlci3jlXsTR4RsjQXczpjWCtg/exec';
+  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzVD6BNY93sqTt_lb096KmcZ7_WZyfu6BPlhg6Gx1o0oNG3-G_NO1dRAt93RYaCZSumdQ/exec';
 
   // ── 로컬스토리지 저장/불러오기 ──
   function getSurveyId() {
@@ -4913,7 +4913,7 @@ function buildInputHtml(q, qi, isCentered) {
     const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
     const saved = answers[qi];
     return \`<div class="options-wrap">\${opts.map((opt, optIdx) => \`
-      <div class="option-item\${saved===optIdx?' selected':''}" onclick="selectSingle(\${qi},\${i},this)">
+      <div class="option-item\${saved===optIdx?' selected':''}" onclick="selectSingle(\${qi},\${optIdx},this)">
         <span class="option-key">\${keys[optIdx]}</span><span>\${escHtml(opt)||'옵션 '+(optIdx+1)}</span>
       </div>\`).join('')}</div>\`;
   }
@@ -4923,14 +4923,14 @@ function buildInputHtml(q, qi, isCentered) {
     const saved = answers[qi] || [];
     return \`\${max>0?\`<div class="max-hint">최대 \${max}개 선택 가능</div>\`:''}
       <div class="options-wrap">\${opts.map((opt, optIdx) => \`
-        <div class="option-item\${saved.includes(optIdx)?' selected':''}" onclick="selectMulti(\${qi},\${optIdx},this,\${max})">
+        <div class="option-item\${saved.includes(optIdx)?' selected':''}" onclick="selectMulti(\${qi},\${i},this,\${max})">
           <span class="option-key">\${keys[optIdx]}</span><span>\${escHtml(opt)||'옵션 '+(optIdx+1)}</span>
         </div>\`).join('')}</div>\`;
   }
   if (q.type === '드롭다운') {
     const saved = answers[qi] ?? '';
     return \`<select class="ans-select" onchange="answers[\${qi}]=this.value; this.classList.toggle('answered', !!this.value);">
-      <option value="" ${(saved===''||saved===undefined||saved===null)?'selected':''}>선택하십시오</option>
+      <option value="" ${saved===''||saved==null?'selected':''}>선택하십시오</option>
       \${q.options.map((opt,i)=>\`<option value="\${i}"\${saved==i?' selected':''}>\${escHtml(opt)||'옵션 '+(i+1)}</option>\`).join('')}
     </select>\`;
   }
