@@ -4930,7 +4930,7 @@ function buildInputHtml(q, qi, isCentered) {
   if (q.type === '드롭다운') {
     const saved = answers[qi] ?? '';
     return \`<select class="ans-select" onchange="answers[\${qi}]=this.value; this.classList.toggle('answered', !!this.value);">
-      <option value="">선택하십시오</option>
+      <option value="" ${saved===''||saved==null?'selected':''}>선택하십시오</option>
       \${q.options.map((opt,i)=>\`<option value="\${i}"\${saved==i?' selected':''}>\${escHtml(opt)||'옵션 '+(i+1)}</option>\`).join('')}
     </select>\`;
   }
