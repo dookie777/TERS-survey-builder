@@ -4357,7 +4357,7 @@
       window._surveyDeployId = Date.now().toString(36);
     }
     const surveyId = window._surveyDeployId;
-    window._currentDeployData = { title, cover, coverActive, questions, surveyId };
+    window._currentDeployData = { title, cover, coverActive, questions, surveyId, startGroupIndex: coverActive ? -1 : 0 };
     document.getElementById('deployUrlText').textContent = '배포 파일을 다운로드하거나 새 탭에서 확인하십시오';
     const popup = document.getElementById('deployPopup');
     const isOpen = popup.classList.contains('open');
