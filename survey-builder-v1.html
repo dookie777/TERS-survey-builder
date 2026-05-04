@@ -3471,7 +3471,7 @@
     }
     if (q.type === '드롭다운') {
       return `<select class="field-input" style="cursor:pointer;" onchange="this.classList.toggle('answered', !!this.value);">
-        <option value="" ${(saved===''||saved===undefined||saved===null)?'selected':''}>선택하십시오</option>
+        <option value="">선택하십시오</option>
         ${q.options.map((opt, i) => `<option value="${i}">${escHtml(opt) || `옵션 ${i+1}`}</option>`).join('')}
       </select>`;
     }
