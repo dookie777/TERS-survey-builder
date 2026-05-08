@@ -2501,7 +2501,7 @@
       </div>`;
     }
     if (q.type === '객관식' || q.type === '체크박스' || q.type === '드롭다운') {
-      const keys = 'ABCDEFGHIJ';
+      const keys = Array.from({length: 50}, (_, i) => String(i + 1));
       const qIdx2 = questions.indexOf(q);
       const qNum = questions.slice(0, qIdx2 + 1).filter(x => x.type !== '섹션').length;
       return `<div class="field-group">
@@ -3443,7 +3443,7 @@
   }
 
   function buildPreviewInput(q, idx) {
-    const keys = 'ABCDEFGHIJ';
+    const keys = Array.from({length: 50}, (_, i) => String(i + 1));
     if (q.type === '단답형') {
       return `<input class="preview-input" type="text" placeholder="답변을 입력하십시오">`;
     }
@@ -4868,7 +4868,7 @@ function toggleDeployTheme() {
 // -1 = 표지, 0~ = 섹션 그룹 인덱스
 let groupIndex = -1;
 const answers = {};
-const keys = 'ABCDEFGHIJ';
+const keys = Array.from({length: 50}, (_, i) => String(i + 1));
 
 function escHtml(str) {
   if (!str) return '';
@@ -4940,7 +4940,7 @@ function buildInputHtml(q, qi, isCentered) {
   if (q.type === '드롭다운') {
     const saved = answers[qi] ?? '';
     return \`<select class="ans-select" onchange="answers[\${qi}]=this.value; this.classList.toggle('answered', !!this.value);">
-      <option value="" \${saved===''||saved==null?'selected':''}>선택하십시오</option>
+      <option value="" ${saved===''||saved==null?'selected':''}>선택하십시오</option>
       \${q.options.map((opt,i)=>\`<option value="\${i}"\${saved===i?' selected':''}>\${escHtml(opt)||'옵션 '+(i+1)}</option>\`).join('')}
     </select>\`;
   }
