@@ -2007,6 +2007,8 @@
       maxCheck: 0,
       shuffle: false,
       priority: false,
+      hasEtc: false,
+      hasNone: false,
       logic: {},
     };
     questions.push(q);
@@ -2501,7 +2503,7 @@
       </div>`;
     }
     if (q.type === '객관식' || q.type === '체크박스' || q.type === '드롭다운') {
-      const keys = Array.from({length: 50}, (_, i) => String(i + 1));
+      const keys = 'ABCDEFGHIJ';
       const qIdx2 = questions.indexOf(q);
       const qNum = questions.slice(0, qIdx2 + 1).filter(x => x.type !== '섹션').length;
       return `<div class="field-group">
@@ -2526,6 +2528,15 @@
         <label class="toggle" style="margin:0;"><input type="checkbox" ${q.shuffle?'checked':''} onchange="updateField(${activeIndex},'shuffle',this.checked)"><span class="toggle-slider"></span></label>
         <span style="font-size:0.78rem;color:var(--text-muted);">선택지 무작위 순서</span>
       </div>
+      ${(q.type === '객관식' || q.type === '체크박스') ? `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+        <label class="toggle" style="margin:0;"><input type="checkbox" ${q.hasEtc?'checked':''} onchange="updateField(${activeIndex},'hasEtc',this.checked)"><span class="toggle-slider"></span></label>
+        <span style="font-size:0.78rem;color:var(--text-muted);">'기타' 선택지 추가 (텍스트 입력)</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+        <label class="toggle" style="margin:0;"><input type="checkbox" ${q.hasNone?'checked':''} onchange="updateField(${activeIndex},'hasNone',this.checked)"><span class="toggle-slider"></span></label>
+        <span style="font-size:0.78rem;color:var(--text-muted);">'없음' 선택지 추가${q.type === '체크박스' ? ' (선택 시 다른 항목 해제)' : ''}</span>
+      </div>` : ''}
       ${q.type === '체크박스' ? `
       <div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
         <label class="toggle" style="margin:0;"><input type="checkbox" ${q.priority?'checked':''} onchange="updateField(${activeIndex},'priority',this.checked)"><span class="toggle-slider"></span></label>
@@ -3443,7 +3454,7 @@
   }
 
   function buildPreviewInput(q, idx) {
-    const keys = Array.from({length: 50}, (_, i) => String(i + 1));
+    const keys = 'ABCDEFGHIJ';
     if (q.type === '단답형') {
       return `<input class="preview-input" type="text" placeholder="답변을 입력하십시오">`;
     }
@@ -3452,6 +3463,7 @@
     }
     if (q.type === '객관식') {
       const saOpts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
+      const saN = saOpts.length;
       return `<div class="preview-options">
         ${saOpts.map((opt, i) => `
           <div class="preview-option" onclick="selectSingle(this)">
@@ -3459,11 +3471,25 @@
             <span>${escHtml(opt) || '옵션 '+(i+1)}</span>
           </div>
         `).join('')}
+        ${q.hasEtc ? `
+          <div class="preview-option" data-special="etc" onclick="selectSingle(this)">
+            <span class="preview-opt-key">${keys[saN] || '·'}</span>
+            <span>기타</span>
+          </div>
+          <div class="preview-etc-wrap" style="display:none;margin-top:6px;">
+            <input class="preview-input" type="text" placeholder="기타 내용을 입력하십시오">
+          </div>` : ''}
+        ${q.hasNone ? `
+          <div class="preview-option" data-special="none" onclick="selectSingle(this)">
+            <span class="preview-opt-key">${keys[saN + (q.hasEtc?1:0)] || '·'}</span>
+            <span>없음</span>
+          </div>` : ''}
       </div>`;
     }
     if (q.type === '체크박스') {
       const max = q.maxCheck || 0;
       const cbOpts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
+      const cbN = cbOpts.length;
       return `<div class="preview-options">
         ${max > 0 ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:8px;">최대 ${max}개 선택 가능</div>` : ''}
         ${cbOpts.map((opt, i) => `
@@ -3472,6 +3498,19 @@
             <span>${escHtml(opt) || '옵션 '+(i+1)}</span>
           </div>
         `).join('')}
+        ${q.hasEtc ? `
+          <div class="preview-option" data-special="etc" onclick="selectMulti(this,${max})">
+            <span class="preview-opt-key">${keys[cbN] || '·'}</span>
+            <span>기타</span>
+          </div>
+          <div class="preview-etc-wrap" style="display:none;margin-top:6px;">
+            <input class="preview-input" type="text" placeholder="기타 내용을 입력하십시오">
+          </div>` : ''}
+        ${q.hasNone ? `
+          <div class="preview-option" data-special="none" onclick="selectMulti(this,${max})">
+            <span class="preview-opt-key">${keys[cbN + (q.hasEtc?1:0)] || '·'}</span>
+            <span>없음</span>
+          </div>` : ''}
       </div>`;
     }
     if (q.type === '드롭다운') {
@@ -3782,16 +3821,37 @@
     const wrap = el.closest('.preview-options');
     wrap.querySelectorAll('.preview-option').forEach(o => o.classList.remove('selected'));
     el.classList.add('selected');
+    updateEtcVisibility(wrap);
   }
 
   function selectMulti(el, max) {
     const wrap = el.closest('.preview-options');
-    const selected = wrap.querySelectorAll('.preview-option.selected');
+    const isNone = el.dataset.special === 'none';
     if (el.classList.contains('selected')) {
       el.classList.remove('selected');
     } else {
+      if (isNone) {
+        // 없음 선택 시 다른 항목 전부 해제
+        wrap.querySelectorAll('.preview-option').forEach(o => o.classList.remove('selected'));
+        el.classList.add('selected');
+        updateEtcVisibility(wrap);
+        return;
+      }
+      // 다른 항목 선택 시 없음 해제
+      const noneEl = wrap.querySelector('.preview-option[data-special="none"]');
+      if (noneEl) noneEl.classList.remove('selected');
+      const selected = wrap.querySelectorAll('.preview-option.selected');
       if (max > 0 && selected.length >= max) return;
       el.classList.add('selected');
+    }
+    updateEtcVisibility(wrap);
+  }
+
+  function updateEtcVisibility(wrap) {
+    const etcEl = wrap.querySelector('.preview-option[data-special="etc"]');
+    const etcWrap = wrap.querySelector('.preview-etc-wrap');
+    if (etcEl && etcWrap) {
+      etcWrap.style.display = etcEl.classList.contains('selected') ? '' : 'none';
     }
   }
   function previewNext() {
@@ -4868,7 +4928,8 @@ function toggleDeployTheme() {
 // -1 = 표지, 0~ = 섹션 그룹 인덱스
 let groupIndex = -1;
 const answers = {};
-const keys = Array.from({length: 50}, (_, i) => String(i + 1));
+const etcTexts = {};
+const keys = 'ABCDEFGHIJ';
 
 function escHtml(str) {
   if (!str) return '';
@@ -4915,35 +4976,62 @@ function buildInputHtml(q, qi, isCentered) {
       oninput="answers[\${qi}]=this.value">\${escHtml(saved)}</textarea>\`;
   }
   if (q.type === '객관식') {
-    const optsWithIdx = q.options.map((opt, origIdx) => ({ opt, origIdx }));
-    const opts = q.shuffle ? [...optsWithIdx].sort(() => Math.random()-0.5) : optsWithIdx;
+    const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
     const saved = answers[qi];
-    return \`<div class="options-wrap">\${opts.map(({opt, origIdx}, displayIdx) => \`
-      <div class="option-item\${saved===origIdx?' selected':''}" onclick="selectSingle(\${qi},\${origIdx},this)">
-        <span class="option-key">\${keys[displayIdx]}</span><span>\${escHtml(opt)||'옵션 '+(origIdx+1)}</span>
-      </div>\`).join('')}</div>\`;
+    const saN = opts.length;
+    return \`<div class="options-wrap">\${opts.map((opt, optIdx) => \`
+      <div class="option-item\${saved===optIdx?' selected':''}" onclick="selectSingle(\${qi},\${optIdx},this)">
+        <span class="option-key">\${keys[optIdx]}</span><span>\${escHtml(opt)||'옵션 '+(optIdx+1)}</span>
+      </div>\`).join('')}\${q.hasEtc?\`
+      <div class="option-item\${saved==='__etc__'?' selected':''}" data-special="etc" onclick="selectSingle(\${qi},'__etc__',this)">
+        <span class="option-key">\${keys[saN]||'·'}</span><span>기타</span>
+      </div>
+      <div id="etcWrap_\${qi}" style="display:\${saved==='__etc__'?'block':'none'};margin-top:6px;">
+        <input class="ans-input" type="text" placeholder="기타 내용을 입력하십시오" value="\${escHtml(etcTexts[qi]||'')}" oninput="etcTexts[\${qi}]=this.value">
+      </div>\`:''}\${q.hasNone?\`
+      <div class="option-item\${saved==='__none__'?' selected':''}" data-special="none" onclick="selectSingle(\${qi},'__none__',this)">
+        <span class="option-key">\${keys[saN+(q.hasEtc?1:0)]||'·'}</span><span>없음</span>
+      </div>\`:''}</div>\`;
   }
   if (q.type === '체크박스') {
     const max = q.maxCheck || 0;
     const isPriority = q.priority || false;
-    const optsWithIdx = q.options.map((opt, origIdx) => ({ opt, origIdx }));
-    const opts = q.shuffle ? [...optsWithIdx].sort(() => Math.random()-0.5) : optsWithIdx;
+    const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
     const saved = answers[qi] || [];
+    const cbN = opts.length;
     return \`\${max>0?\`<div class="max-hint">\${isPriority?'우선순위':'최대'} \${max}개 선택 가능</div>\`:''}
-      <div class="options-wrap">\${opts.map(({opt, origIdx}, displayIdx) => {
-        const rankIdx = saved.indexOf(origIdx);
+      <div class="options-wrap">\${opts.map((opt, optIdx) => {
+        const rankIdx = saved.indexOf(optIdx);
         const isSelected = rankIdx >= 0;
-        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : keys[displayIdx];
-        return \`<div class="option-item\${isSelected?' selected':''}" data-optidx="\${origIdx}" data-key="\${keys[displayIdx]}" onclick="selectMulti(\${qi},\${origIdx},this,\${max},\${isPriority})">
-          <span class="option-key">\${rankLabel}</span><span>\${escHtml(opt)||'옵션 '+(origIdx+1)}</span>
+        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : keys[optIdx];
+        return \`<div class="option-item\${isSelected?' selected':''}" data-optidx="\${optIdx}" data-key="\${keys[optIdx]}" onclick="selectMulti(\${qi},\${optIdx},this,\${max},\${isPriority})">
+          <span class="option-key">\${rankLabel}</span><span>\${escHtml(opt)||'옵션 '+(optIdx+1)}</span>
         </div>\`;
-      }).join('')}</div>\`;
+      }).join('')}\${q.hasEtc?(()=>{
+        const rankIdx = saved.indexOf('__etc__');
+        const isSelected = rankIdx >= 0;
+        const eKey = keys[cbN]||'·';
+        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : eKey;
+        return \`<div class="option-item\${isSelected?' selected':''}" data-optidx="__etc__" data-key="\${eKey}" data-special="etc" onclick="selectMulti(\${qi},'__etc__',this,\${max},\${isPriority})">
+          <span class="option-key">\${rankLabel}</span><span>기타</span>
+        </div>
+        <div id="etcWrap_\${qi}" style="display:\${isSelected?'block':'none'};margin-top:6px;">
+          <input class="ans-input" type="text" placeholder="기타 내용을 입력하십시오" value="\${escHtml(etcTexts[qi]||'')}" oninput="etcTexts[\${qi}]=this.value">
+        </div>\`;
+      })():''}\${q.hasNone?(()=>{
+        const rankIdx = saved.indexOf('__none__');
+        const isSelected = rankIdx >= 0;
+        const nKey = keys[cbN+(q.hasEtc?1:0)]||'·';
+        return \`<div class="option-item\${isSelected?' selected':''}" data-optidx="__none__" data-key="\${nKey}" data-special="none" onclick="selectMulti(\${qi},'__none__',this,\${max},\${isPriority})">
+          <span class="option-key">\${nKey}</span><span>없음</span>
+        </div>\`;
+      })():''}</div>\`;
   }
   if (q.type === '드롭다운') {
     const saved = answers[qi] ?? '';
     return \`<select class="ans-select" onchange="answers[\${qi}]=this.value; this.classList.toggle('answered', !!this.value);">
       <option value="" \${saved===''||saved==null?'selected':''}>선택하십시오</option>
-      \${q.options.map((opt,i)=>\`<option value="\${i}"\${saved===i?' selected':''}>\${escHtml(opt)||'옵션 '+(i+1)}</option>\`).join('')}
+      \${q.options.map((opt,i)=>\`<option value="\${i}"\${saved==i?' selected':''}>\${escHtml(opt)||'옵션 '+(i+1)}</option>\`).join('')}
     </select>\`;
   }
   if (q.type === '척도형') {
@@ -5256,18 +5344,40 @@ function selectSingle(qi, idx, el) {
   answers[qi] = idx;
   el.closest('.options-wrap').querySelectorAll('.option-item').forEach(o => o.classList.remove('selected'));
   el.classList.add('selected');
+  const etcWrap = document.getElementById('etcWrap_'+qi);
+  if (etcWrap) etcWrap.style.display = (idx === '__etc__') ? 'block' : 'none';
 }
 
 function selectMulti(qi, idx, el, max, isPriority) {
   if (!answers[qi]) answers[qi] = [];
   const arr = answers[qi];
+  const wrap = el.closest('.options-wrap');
   const pos = arr.indexOf(idx);
   if (pos >= 0) { arr.splice(pos, 1); el.classList.remove('selected'); }
-  else { if (max > 0 && arr.length >= max) return; arr.push(idx); el.classList.add('selected'); }
+  else {
+    if (idx === '__none__') {
+      // 없음 선택 시 다른 항목 전부 해제
+      arr.length = 0;
+      if (wrap) wrap.querySelectorAll('.option-item').forEach(o => o.classList.remove('selected'));
+      arr.push(idx); el.classList.add('selected');
+    } else {
+      // 다른 항목 선택 시 없음 해제
+      const nonePos = arr.indexOf('__none__');
+      if (nonePos >= 0) {
+        arr.splice(nonePos, 1);
+        const noneEl = wrap && wrap.querySelector('.option-item[data-special="none"]');
+        if (noneEl) noneEl.classList.remove('selected');
+      }
+      if (max > 0 && arr.length >= max) return;
+      arr.push(idx); el.classList.add('selected');
+    }
+  }
+  const etcWrap = document.getElementById('etcWrap_'+qi);
+  if (etcWrap) etcWrap.style.display = arr.indexOf('__etc__') >= 0 ? 'block' : 'none';
   if (isPriority) {
-    const wrap = el.closest('.options-wrap');
     if (wrap) wrap.querySelectorAll('.option-item').forEach(item => {
-      const oIdx = parseInt(item.dataset.optidx);
+      const oRaw = item.dataset.optidx;
+      const oIdx = isNaN(+oRaw) ? oRaw : +oRaw;
       const rankIdx = arr.indexOf(oIdx);
       const keyEl = item.querySelector('.option-key');
       if (keyEl) keyEl.textContent = rankIdx >= 0 ? (rankIdx+1)+'순위' : item.dataset.key;
@@ -5464,13 +5574,18 @@ function submitToGoogleSheets() {
   realQuestions.forEach((q, i) => {
     const qi = questions.indexOf(q);
     let ans = answers[qi] ?? null;
+    const optLabel = (idx) => {
+      if (idx === '__etc__') return '기타: ' + (etcTexts[qi] || '').trim();
+      if (idx === '__none__') return '없음';
+      return q.options[idx] != null ? q.options[idx] : idx;
+    };
     if (q.type === '객관식' && ans != null && q.options) {
-      ans = q.options[parseInt(ans)] || ans;
+      ans = (ans === '__etc__' || ans === '__none__') ? optLabel(ans) : (q.options[parseInt(ans)] || ans);
     } else if (q.type === '체크박스' && Array.isArray(ans) && q.options) {
       if (q.priority) {
-        ans = ans.map((idx, rank) => (rank+1)+'순위: '+(q.options[idx]||idx)).join(', ');
+        ans = ans.map((idx, rank) => (rank+1)+'순위: '+optLabel(idx)).join(', ');
       } else {
-        ans = ans.map(idx => q.options[idx] || idx).join(', ');
+        ans = ans.map(idx => optLabel(idx)).join(', ');
       }
     } else if (q.type === '드롭다운' && ans != null && q.options) {
       ans = q.options[parseInt(ans)] || ans;
