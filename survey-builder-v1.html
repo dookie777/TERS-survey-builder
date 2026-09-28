@@ -2503,7 +2503,7 @@
       </div>`;
     }
     if (q.type === '객관식' || q.type === '체크박스' || q.type === '드롭다운') {
-      const keys = 'ABCDEFGHIJ';
+      const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
       const qIdx2 = questions.indexOf(q);
       const qNum = questions.slice(0, qIdx2 + 1).filter(x => x.type !== '섹션').length;
       return `<div class="field-group">
@@ -3454,7 +3454,7 @@
   }
 
   function buildPreviewInput(q, idx) {
-    const keys = 'ABCDEFGHIJ';
+    const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     if (q.type === '단답형') {
       return `<input class="preview-input" type="text" placeholder="답변을 입력하십시오">`;
     }
@@ -4929,7 +4929,7 @@ function toggleDeployTheme() {
 let groupIndex = -1;
 const answers = {};
 const etcTexts = {};
-const keys = 'ABCDEFGHIJ';
+const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 function escHtml(str) {
   if (!str) return '';
