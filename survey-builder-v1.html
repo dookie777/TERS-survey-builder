@@ -442,6 +442,9 @@
     }
     .q-item:hover .q-item-del { opacity: 1; }
     .q-item-del:hover { color: var(--accent); background: rgba(255,255,255,0.06); }
+    .q-item-dup { background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; padding: 2px 4px; border-radius: var(--radius-sm); transition: all 0.2s; opacity: 0; flex-shrink: 0; }
+    .q-item:hover .q-item-dup { opacity: 1; }
+    .q-item-dup:hover { color: var(--accent); background: rgba(255,255,255,0.06); }
     .section-divider-item { border-style: dashed; opacity: 0.7; }
     .section-divider-item:hover { opacity: 1; }
     .section-divider-item.active { opacity: 1; }
@@ -1832,6 +1835,7 @@
       <button class="btn btn-ghost" onclick="goToList()">목록으로</button>
       <button class="btn btn-ghost" onclick="saveSurvey()">저장</button>
       <button class="btn btn-ghost" onclick="exportJSON()">내보내기</button>
+      <button class="btn btn-ghost" onclick="openPrintView()">인쇄</button>
       <button class="btn btn-ghost" id="btnPreviewToggle" onclick="togglePreviewPopup(event)">전체 테스트</button>
       <div class="preview-popup" id="previewPopup">
         <button class="preview-popup-btn" onclick="openFullPreview('start')">처음부터</button>
@@ -2055,6 +2059,29 @@
     renderAll();
   }
 
+  // ── Duplicate Question ──
+  function duplicateQuestion(idx, e) {
+    e.stopPropagation();
+    const insertAt = idx + 1;
+    // 분기 로직 인덱스 보정: 삽입 위치 이상을 가리키는 jump 타깃은 +1
+    const shift = v => {
+      if (typeof v !== 'string' || v.indexOf('jump:') !== 0) return v;
+      const t = parseInt(v.slice(5));
+      return (!isNaN(t) && t >= insertAt) ? 'jump:' + (t + 1) : v;
+    };
+    questions.forEach(q => {
+      if (!q.logic) return;
+      Object.keys(q.logic).forEach(k => { if (k !== 'scaleRules') q.logic[k] = shift(q.logic[k]); });
+      if (Array.isArray(q.logic.scaleRules)) q.logic.scaleRules.forEach(r => { if (r) r.action = shift(r.action); });
+    });
+    const copy = JSON.parse(JSON.stringify(questions[idx]));
+    questions.splice(insertAt, 0, copy);
+    coverActive = false;
+    activeIndex = insertAt;
+    if (copy.type !== '섹션') previewIndex = insertAt;
+    renderAll();
+  }
+
   // ── Select Cover ──
   function selectCover() {
     coverActive = true;
@@ -2273,6 +2300,7 @@
               <div class="q-type-badge">섹션 구분</div>
               <div class="q-preview-text">${stripHtml(q.text) || '(섹션 제목 없음)'}</div>
             </div>
+            <button class="q-item-dup" onclick="duplicateQuestion(${i}, event)" title="복사">⧉</button>
             <button class="q-item-del" onclick="deleteQuestion(${i}, event)">✕</button>
           </div>`;
       }
@@ -2285,6 +2313,7 @@
             <div class="q-type-badge">${q.type}</div>
             <div class="q-preview-text">${stripHtml(q.text) || '(질문 없음)'}</div>
           </div>
+          <button class="q-item-dup" onclick="duplicateQuestion(${i}, event)" title="복사">⧉</button>
           <button class="q-item-del" onclick="deleteQuestion(${i}, event)">✕</button>
         </div>`;
     }).join('');
@@ -5728,6 +5757,378 @@ renderPage();
 </body>
 </html>`;
     return html;
+  }
+
+  // ── Print: 설문 설계서 ──
+  function openPrintView() {
+    const html = buildPrintHtml();
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    window.open(URL.createObjectURL(blob), '_blank');
+  }
+
+  function buildPrintHtml() {
+    const accent = currentSelectColor || '#FF6B35';
+    const surveyTitle = (document.getElementById('surveyTitle') || {}).value || '새 설문지';
+    const logoImg = document.querySelector('.header-logo img');
+    const logoSrc = logoImg ? logoImg.getAttribute('src') : '';
+    const today = new Date();
+    const dateStr = today.getFullYear() + '.' + String(today.getMonth()+1).padStart(2,'0') + '.' + String(today.getDate()).padStart(2,'0');
+    const keysAll = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const esc = escHtml;
+    const strip = s => stripHtml(s || '');
+
+    // ── 데이터 정리 ──
+    const realQs = [];                 // {q, qi, num}
+    const numOf = {};                  // qi -> Q번호
+    questions.forEach((q, i) => { if (q.type !== '섹션') { realQs.push({ q, qi: i, num: realQs.length + 1 }); numOf[i] = realQs.length; } });
+    const groups = getSectionGroups(); // [[qi,...], ...]
+    const groupMeta = groups.map((g, gi) => {
+      let title = '';
+      for (let i = g[0] - 1; i >= 0; i--) { if (questions[i].type === '섹션') { title = strip(questions[i].text); break; } if (questions[i].type !== '섹션') break; }
+      const first = numOf[g[0]], last = numOf[g[g.length - 1]];
+      return { gi, title, first, last, count: g.length, qis: g };
+    });
+    const groupOfQi = {}; groups.forEach((g, gi) => g.forEach(qi => { groupOfQi[qi] = gi; }));
+    const groupOfJump = idx => { for (let gi = 0; gi < groups.length; gi++) { if (groups[gi].some(qi => qi >= idx)) return gi; } return -1; };
+    const groupLabel = gi => (gi < 0 ? '?' : (groupMeta[gi].title ? groupMeta[gi].title : ('섹션 ' + (gi + 1))));
+
+    // 로직 목록 [{fromQi, fromNum, fromGi, label(조건), action:'end'|'jump', toGi}]
+    const rules = [];
+    realQs.forEach(({ q, qi, num }) => {
+      const logic = q.logic || {};
+      if (q.type === '객관식' || q.type === '체크박스' || q.type === '드롭다운') {
+        Object.keys(logic).forEach(k => {
+          if (k.indexOf('opt_') !== 0 || !logic[k]) return;
+          const oi = parseInt(k.slice(4));
+          const label = (q.type === '드롭다운' ? (oi + 1) + '. ' : keysAll[oi] + '. ') + (strip(q.options[oi]) || '옵션 ' + (oi + 1));
+          const act = logic[k];
+          rules.push({ fromQi: qi, fromNum: num, fromGi: groupOfQi[qi], cond: label, condShort: q.type === '드롭다운' ? String(oi + 1) : keysAll[oi], action: act === 'end' ? 'end' : 'jump', toGi: act === 'end' ? -1 : groupOfJump(parseInt(act.slice(5))) });
+        });
+      }
+      if (q.type === '척도형' && Array.isArray(logic.scaleRules)) {
+        logic.scaleRules.forEach(r => {
+          if (!r || !r.action) return;
+          const condWord = r.condition === 'gte' ? '이상' : r.condition === 'eq' ? '' : '이하';
+          const label = r.value + '점 ' + condWord;
+          const sym = r.condition === 'gte' ? '≥' : r.condition === 'eq' ? '=' : '≤';
+          rules.push({ fromQi: qi, fromNum: num, fromGi: groupOfQi[qi], cond: label.trim(), condShort: sym + r.value, action: r.action === 'end' ? 'end' : 'jump', toGi: r.action === 'end' ? -1 : groupOfJump(parseInt(r.action.slice(5))) });
+        });
+      }
+    });
+
+    // 파이핑 참조: refs[num] = [num이 참조하는 Q번호들], refBy[num] = [num을 참조하는 Q번호들]
+    const refs = {}, refBy = {};
+    const pipeRe = /\{Q(\d+)\}/g;
+    realQs.forEach(({ q, num }) => {
+      const src = (q.text || '') + ' ' + (q.description || '');
+      let m; const set = new Set();
+      while ((m = pipeRe.exec(src)) !== null) set.add(parseInt(m[1]));
+      refs[num] = Array.from(set);
+      set.forEach(t => { (refBy[t] = refBy[t] || []).push(num); });
+    });
+    const markPipe = html => (html || '').replace(/\{Q(\d+)\}/g, '<span class="pipe">{Q$1}</span>');
+
+    // ── 표지 ──
+    const coverTitle = strip(cover.title) || surveyTitle;
+    const coverSub = strip(cover.subtitle);
+    const coverTexts = (cover.blocks || []).filter(b => b.type === 'text' && strip(b.content)).map(b => `<div class="cover-text">${markPipe(b.content)}</div>`).join('');
+    const statCards = [
+      ['문항', realQs.length], ['섹션', groups.length], ['분기 규칙', rules.length],
+      ['필수 문항', realQs.filter(x => x.q.required).length]
+    ].map(([k, v]) => `<div class="stat"><div class="stat-v">${v}</div><div class="stat-k">${k}</div></div>`).join('');
+
+    // ── 흐름도 SVG ──
+    const nodeW = 300, nodeH = 46, gapY = 30, x0 = 24, y0 = 20;
+    const nodes = []; // {id, label, sub, y, kind}
+    if (coverActive) nodes.push({ id: 'start', label: '표지', sub: '설문 시작', kind: 'term' });
+    groupMeta.forEach((g, gi) => nodes.push({ id: 'g' + gi, label: (g.title ? g.title : '섹션 ' + (gi + 1)), sub: 'Q' + g.first + (g.first !== g.last ? ' – Q' + g.last : '') + ' · ' + g.count + '문항', kind: 'sec', gi }));
+    nodes.push({ id: 'end', label: '설문 종료', sub: '응답 제출', kind: 'term' });
+    nodes.forEach((n, i) => { n.y = y0 + i * (nodeH + gapY); });
+    const nodeById = {}; nodes.forEach(n => nodeById[n.id] = n);
+    const svgH = y0 + nodes.length * (nodeH + gapY);
+    // 분기 화살표 (우측 레인)
+    const branches = rules.map(r => ({ from: 'g' + r.fromGi, to: r.action === 'end' ? 'end' : 'g' + r.toGi, label: 'Q' + r.fromNum + ' ' + r.condShort, end: r.action === 'end' }));
+    // 동일 from→to 병합
+    const merged = {};
+    branches.forEach(b => { const k = b.from + '>' + b.to; (merged[k] = merged[k] || { from: b.from, to: b.to, end: b.end, labels: [] }).labels.push(b.label); });
+    const mergedList = Object.values(merged).filter(b => nodeById[b.from] && nodeById[b.to] && b.from !== b.to);
+    let svgPaths = '';
+    // 순차 화살표
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const a = nodes[i], b = nodes[i + 1];
+      svgPaths += `<line x1="${x0 + nodeW / 2}" y1="${a.y + nodeH}" x2="${x0 + nodeW / 2}" y2="${b.y}" class="flow-seq" marker-end="url(#arr)"/>`;
+    }
+    // 분기 화살표
+    mergedList.forEach((b, li) => {
+      const a = nodeById[b.from], t = nodeById[b.to];
+      const lane = x0 + nodeW + 26 + li * 30;
+      const ya = a.y + nodeH / 2, yt = t.y + nodeH / 2;
+      const cls = b.end ? 'flow-end' : 'flow-jump';
+      svgPaths += `<path d="M ${x0 + nodeW} ${ya} H ${lane} V ${yt} H ${x0 + nodeW + 6}" class="${cls}" marker-end="url(#arr2)"/>`;
+      const ly = (ya + yt) / 2;
+      const txt = b.labels.length > 2 ? b.labels.slice(0, 2).join(', ') + ' 외 ' + (b.labels.length - 2) : b.labels.join(', ');
+      svgPaths += `<text x="${lane + 4}" y="${ly}" class="flow-lbl" transform="rotate(90 ${lane + 4} ${ly})" text-anchor="middle">${esc(txt)}${b.end ? ' → 종료' : ''}</text>`;
+    });
+    const svgW = x0 + nodeW + 26 + Math.max(1, mergedList.length) * 30 + 40;
+    let svgNodes = '';
+    nodes.forEach(n => {
+      const term = n.kind === 'term';
+      svgNodes += `<g class="node ${term ? 'term' : 'sec'}">
+        <rect x="${x0}" y="${n.y}" width="${nodeW}" height="${nodeH}" rx="${term ? 23 : 6}"/>
+        <text x="${x0 + 16}" y="${n.y + 20}" class="n-title">${esc(n.label.length > 26 ? n.label.slice(0, 26) + '…' : n.label)}</text>
+        <text x="${x0 + 16}" y="${n.y + 36}" class="n-sub">${esc(n.sub)}</text>
+      </g>`;
+    });
+    const flowSvg = `<svg viewBox="0 0 ${svgW} ${svgH}" width="100%" style="max-width:${svgW}px;display:block;">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${accent}"/></marker>
+      </defs>${svgPaths}${svgNodes}</svg>`;
+
+    const sectionTable = groupMeta.map((g, gi) => {
+      const br = rules.filter(r => r.fromGi === gi);
+      const brTxt = br.length ? br.map(r => 'Q' + r.fromNum + ' ' + r.condShort + (r.action === 'end' ? ' → 종료' : ' → ' + groupLabel(r.toGi))).join('<br>') : '<span class="muted">—</span>';
+      return `<tr><td class="c">${gi + 1}</td><td>${esc(g.title) || '<span class="muted">(제목 없음)</span>'}</td><td class="c">Q${g.first}${g.first !== g.last ? '–Q' + g.last : ''}</td><td class="c">${g.count}</td><td>${brTxt}</td></tr>`;
+    }).join('');
+
+    // ── 문항 렌더 ──
+    const typeName = t => t === '객관식' ? '객관식 (단일 선택)' : t === '체크박스' ? '체크박스 (다중 선택)' : t;
+    const scaleRow = (q) => {
+      const nums = []; for (let i = q.scaleMin; i <= q.scaleMax; i++) nums.push(i);
+      const dots = nums.map(n => `<div class="sdot">${n}</div>`).join('');
+      const hasLbl = q.scaleMinLabel || q.scaleMidLabel || q.scaleMaxLabel;
+      const lbl = hasLbl ? `<div class="slbl"><span>${esc(q.scaleMinLabel || '')}</span><span class="mid">${esc(q.scaleMidLabel || '')}</span><span>${esc(q.scaleMaxLabel || '')}</span></div>` : '';
+      return `<div class="scale"><div class="sdots">${dots}</div>${lbl}</div>`;
+    };
+    const buildAnswer = (q, qi, num) => {
+      const logic = q.logic || {};
+      const tag = oi => { const a = logic['opt_' + oi]; if (!a) return ''; return `<span class="ltag">${a === 'end' ? '→ 설문 종료' : '→ ' + esc(groupLabel(groupOfJump(parseInt(a.slice(5)))))}</span>`; };
+      if (q.type === '단답형') return `<div class="ans-line"></div>`;
+      if (q.type === '장문형') return `<div class="ans-box"></div>`;
+      if (q.type === '객관식' || q.type === '체크박스') {
+        const shape = q.type === '체크박스' ? 'sq' : 'ci';
+        let n = q.options.length;
+        let rows = q.options.map((o, oi) => `<li><span class="mk ${shape}">${keysAll[oi] || ''}</span><span class="otxt">${esc(o) || '옵션 ' + (oi + 1)}</span>${tag(oi)}</li>`).join('');
+        if (q.hasEtc) { rows += `<li><span class="mk ${shape}">${keysAll[n++] || '·'}</span><span class="otxt">기타 <span class="etc-line"></span></span></li>`; }
+        if (q.hasNone) { rows += `<li><span class="mk ${shape}">${keysAll[n++] || '·'}</span><span class="otxt">없음</span></li>`; }
+        const hint = q.type === '체크박스' && q.maxCheck ? `<div class="hint">${q.priority ? '우선순위' : '최대'} ${q.maxCheck}개 선택</div>` : '';
+        return `${hint}<ul class="opts">${rows}</ul>`;
+      }
+      if (q.type === '드롭다운') {
+        return `<div class="hint">드롭다운 선택</div><ul class="opts dd">${q.options.map((o, oi) => `<li><span class="mk num">${oi + 1}</span><span class="otxt">${esc(o) || '옵션 ' + (oi + 1)}</span>${tag(oi)}</li>`).join('')}</ul>`;
+      }
+      if (q.type === '척도형') return scaleRow(q);
+      if (q.type === '행렬형') {
+        const nums = []; for (let i = q.scaleMin; i <= q.scaleMax; i++) nums.push(i);
+        const head = `<tr><th></th>${nums.map(n => `<th>${n}</th>`).join('')}</tr>`;
+        const body = (q.rows || []).map((r, ri) => `<tr><td class="rl"><span class="rn">${ri + 1}</span>${esc(r) || '항목 ' + (ri + 1)}</td>${nums.map(() => `<td><span class="mdot"></span></td>`).join('')}</tr>`).join('');
+        const hasLbl = q.scaleMinLabel || q.scaleMidLabel || q.scaleMaxLabel;
+        const lbl = hasLbl ? `<div class="slbl mx"><span>${esc(q.scaleMinLabel || '')}</span><span class="mid">${esc(q.scaleMidLabel || '')}</span><span>${esc(q.scaleMaxLabel || '')}</span></div>` : '';
+        return `<table class="matrix">${head}${body}</table>${lbl}`;
+      }
+      return '';
+    };
+    const buildMeta = (q, qi, num) => {
+      const chips = [];
+      chips.push(`<span class="chip">${esc(typeName(q.type))}</span>`);
+      if (q.required) chips.push(`<span class="chip req">필수</span>`);
+      if (q.shuffle) chips.push(`<span class="chip">선택지 무작위</span>`);
+      if (q.type === '체크박스' && q.maxCheck) chips.push(`<span class="chip">최대 ${q.maxCheck}개</span>`);
+      if (q.type === '체크박스' && q.priority) chips.push(`<span class="chip">우선순위 모드</span>`);
+      if (q.hasEtc) chips.push(`<span class="chip">기타 입력</span>`);
+      if (q.hasNone) chips.push(`<span class="chip">없음 선택지</span>`);
+      if (q.media && q.media.src) chips.push(`<span class="chip">${q.media.type === 'video' ? '영상' : '이미지'} 첨부</span>`);
+      const lines = [];
+      const myRules = rules.filter(r => r.fromQi === qi);
+      if (myRules.length) lines.push(`<div class="ml"><b>분기</b>${myRules.map(r => `<div>${esc(r.cond)} → ${r.action === 'end' ? '<span class="end">설문 종료</span>' : esc(groupLabel(r.toGi))}</div>`).join('')}</div>`);
+      if (refs[num] && refs[num].length) lines.push(`<div class="ml"><b>파이핑</b><div>${refs[num].map(t => 'Q' + t).join(', ')} 응답 삽입</div></div>`);
+      if (refBy[num] && refBy[num].length) lines.push(`<div class="ml"><b>참조됨</b><div>${refBy[num].map(t => 'Q' + t).join(', ')}에서 {Q${num}}로 사용</div></div>`);
+      return `<div class="meta"><div class="chips">${chips.join('')}</div>${lines.join('')}</div>`;
+    };
+    const buildQ = ({ q, qi, num }) => {
+      const media = q.media && q.media.src
+        ? (q.media.type === 'video'
+          ? `<div class="media-note">▶ 영상: ${esc(q.media.src)}</div>`
+          : `<div class="media"><img src="${q.media.src}" alt=""></div>`)
+        : '';
+      const pos = (q.mediaPosition || 'below');
+      return `<div class="q">
+        <div class="q-main">
+          <div class="q-head"><span class="q-num">Q${num}</span><span class="q-type">${esc(typeName(q.type))}</span>${q.required ? '<span class="q-req">* 필수</span>' : ''}</div>
+          ${pos === 'above' ? media : ''}
+          <div class="q-text">${markPipe(q.text) || '<span class="muted">(질문 없음)</span>'}</div>
+          ${q.description ? `<div class="q-desc">${markPipe(q.description)}</div>` : ''}
+          ${pos === 'below' ? media : ''}
+          <div class="q-ans">${buildAnswer(q, qi, num)}</div>
+        </div>
+        ${buildMeta(q, qi, num)}
+      </div>`;
+    };
+    const bodyHtml = groupMeta.map((g, gi) => {
+      return `<div class="sec">
+        <div class="sec-head"><span class="sec-n">SECTION ${gi + 1}</span><span class="sec-t">${esc(g.title) || '<span class="muted">(섹션 제목 없음)</span>'}</span><span class="sec-r">Q${g.first}${g.first !== g.last ? ' – Q' + g.last : ''}</span></div>
+        ${g.qis.map(qi => buildQ({ q: questions[qi], qi, num: numOf[qi] })).join('')}
+      </div>`;
+    }).join('');
+
+    const appendix = rules.length
+      ? `<table class="ltable"><tr><th>문항</th><th>조건</th><th>동작</th><th>이동 대상</th></tr>${rules.map(r => `<tr><td class="c">Q${r.fromNum}</td><td>${esc(r.cond)}</td><td class="c">${r.action === 'end' ? '<span class="end">설문 종료</span>' : '섹션 이동'}</td><td>${r.action === 'end' ? '—' : esc(groupLabel(r.toGi))}</td></tr>`).join('')}</table>`
+      : `<div class="muted">설정된 분기 규칙이 없습니다</div>`;
+
+    return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${esc(coverTitle)} · 설문 설계서</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+<style>
+  :root { --ac: ${accent}; --ink: #111; --mute: #777; --line: #d9d9d9; --soft: #f4f4f4; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: 'Noto Sans KR', sans-serif; color: var(--ink); background: #e9e9e9; font-size: 10.5pt; line-height: 1.5; }
+  .toolbar { position: sticky; top: 0; z-index: 10; background: #1a1a1a; color: #eee; display: flex; align-items: center; gap: 18px; padding: 10px 20px; font-size: 0.85rem; }
+  .toolbar .tb-title { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.1rem; color: #fff; }
+  .toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .toolbar .sp { flex: 1; }
+  .toolbar button { background: var(--ac); color: #fff; border: none; border-radius: 6px; padding: 8px 18px; font-family: inherit; font-weight: 700; cursor: pointer; font-size: 0.85rem; }
+  .toolbar .note { color: #999; font-size: 0.75rem; }
+  .doc { max-width: 210mm; margin: 24px auto 60px; }
+  .page { background: #fff; padding: 18mm 16mm; box-shadow: 0 2px 14px rgba(0,0,0,0.12); margin-bottom: 20px; }
+  .muted { color: var(--mute); }
+  .c { text-align: center; }
+  /* 표지 */
+  .cover { min-height: 260mm; display: flex; flex-direction: column; }
+  .cover .logo img { height: 40px; filter: invert(1); }
+  .cover .kicker { font-family: 'Bebas Neue', sans-serif; letter-spacing: 4px; font-size: 1.05rem; color: var(--ac); margin-top: 60px; }
+  .cover h1 { font-size: 2rem; font-weight: 900; line-height: 1.3; margin-top: 8px; word-break: keep-all; }
+  .cover .sub { font-size: 1.05rem; color: #444; margin-top: 10px; }
+  .cover .cover-text { margin-top: 14px; color: #444; font-size: 0.95rem; }
+  .cover .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 40px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 12px; text-align: center; }
+  .stat-v { font-size: 1.6rem; font-weight: 900; color: var(--ac); line-height: 1.1; }
+  .stat-k { font-size: 0.75rem; color: var(--mute); margin-top: 4px; }
+  .cover .foot { margin-top: auto; font-size: 0.78rem; color: var(--mute); display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 10px; }
+  /* 공통 헤딩 */
+  h2 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.3rem; color: var(--ink); border-bottom: 2px solid var(--ink); padding-bottom: 6px; margin-bottom: 14px; }
+  h2 small { font-family: 'Noto Sans KR', sans-serif; letter-spacing: 0; font-size: 0.8rem; font-weight: 400; color: var(--mute); margin-left: 10px; }
+  /* 흐름도 */
+  .flow-seq { stroke: #333; stroke-width: 1.5; }
+  .flow-jump { fill: none; stroke: var(--ac); stroke-width: 1.5; }
+  .flow-end { fill: none; stroke: var(--ac); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .flow-lbl { font-size: 10px; fill: var(--ac); font-family: 'Noto Sans KR', sans-serif; }
+  .node.sec rect { fill: #fff; stroke: #333; stroke-width: 1.5; }
+  .node.term rect { fill: #111; stroke: #111; }
+  .node .n-title { font-size: 12px; font-weight: 700; fill: #111; font-family: 'Noto Sans KR', sans-serif; }
+  .node .n-sub { font-size: 9.5px; fill: #777; font-family: 'Noto Sans KR', sans-serif; }
+  .node.term .n-title { fill: #fff; } .node.term .n-sub { fill: #bbb; }
+  .legend { display: flex; gap: 18px; font-size: 0.75rem; color: var(--mute); margin: 8px 0 18px; }
+  .legend span::before { content: ''; display: inline-block; width: 22px; height: 0; border-top: 2px solid #333; margin-right: 6px; vertical-align: middle; }
+  .legend .lj::before { border-color: var(--ac); }
+  .legend .le::before { border-color: var(--ac); border-top-style: dashed; }
+  table.stable, table.ltable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.stable th, table.ltable th { background: var(--soft); text-align: left; padding: 7px 8px; border-bottom: 1px solid #999; font-weight: 700; }
+  table.stable td, table.ltable td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  /* 본문 */
+  .sec { break-inside: auto; margin-bottom: 8mm; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; background: #111; color: #fff; padding: 8px 12px; border-radius: 4px; margin-bottom: 10px; break-after: avoid; }
+  .sec-n { font-family: 'Bebas Neue', sans-serif; letter-spacing: 2px; color: var(--ac); font-size: 1rem; }
+  .sec-t { font-weight: 700; font-size: 0.95rem; flex: 1; }
+  .sec-r { font-size: 0.75rem; color: #bbb; }
+  .q { display: grid; grid-template-columns: 1fr 50mm; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); break-inside: avoid; }
+  body.meta-off .q { grid-template-columns: 1fr; }
+  body.meta-off .meta, body.meta-off .ltag, body.meta-off .flow-page, body.meta-off .appendix { display: none !important; }
+  body.meta-off .pipe { background: none; color: inherit; font-weight: inherit; }
+  .q-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .q-num { font-family: 'Bebas Neue', sans-serif; font-size: 1.15rem; letter-spacing: 1px; color: var(--ac); }
+  .q-type { font-size: 0.7rem; color: var(--mute); letter-spacing: 0.04em; }
+  .q-req { font-size: 0.7rem; color: #c0392b; }
+  .q-text { font-size: 1rem; font-weight: 600; word-break: keep-all; }
+  .q-desc { font-size: 0.85rem; color: #555; margin-top: 3px; word-break: keep-all; }
+  .q-text p, .q-desc p { margin: 0; } .ql-align-center { text-align: center; } .ql-align-right { text-align: right; }
+  .q-text ul, .q-text ol, .q-desc ul, .q-desc ol { padding-left: 1.4em; }
+  .pipe { background: #fff1e8; color: var(--ac); font-weight: 700; padding: 0 3px; border-radius: 3px; }
+  .media { margin: 8px 0; } .media img { max-width: 100%; max-height: 60mm; border-radius: 4px; border: 1px solid var(--line); }
+  .media-note { font-size: 0.78rem; color: var(--mute); margin: 6px 0; word-break: break-all; }
+  .q-ans { margin-top: 10px; }
+  .ans-line { height: 9mm; border-bottom: 1px solid #333; }
+  .ans-box { height: 28mm; border: 1px solid #333; border-radius: 3px; }
+  .hint { font-size: 0.72rem; color: var(--mute); margin-bottom: 6px; }
+  ul.opts { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  ul.opts li { display: flex; align-items: center; gap: 9px; font-size: 0.92rem; }
+  .mk { width: 20px; height: 20px; border: 1.3px solid #333; display: inline-flex; align-items: center; justify-content: center; font-size: 0.62rem; font-weight: 700; color: #333; flex-shrink: 0; }
+  .mk.ci { border-radius: 50%; } .mk.sq { border-radius: 3px; } .mk.num { border-radius: 3px; border-color: #bbb; color: #777; }
+  .otxt { flex: 1; }
+  .etc-line { display: inline-block; width: 60mm; border-bottom: 1px solid #333; height: 0.9em; vertical-align: bottom; margin-left: 4px; }
+  .ltag { font-size: 0.7rem; color: var(--ac); border: 1px solid var(--ac); border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+  .scale { margin-top: 4px; }
+  .sdots { display: flex; justify-content: space-between; gap: 4px; }
+  .sdot { width: 30px; height: 30px; border-radius: 50%; border: 1.3px solid #333; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; }
+  .slbl { display: flex; justify-content: space-between; font-size: 0.75rem; color: #444; margin-top: 6px; }
+  .slbl .mid { text-align: center; } .slbl span:last-child { text-align: right; } .slbl span { flex: 1; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.matrix th { font-size: 0.7rem; font-weight: 700; color: #333; padding: 4px 2px; border-bottom: 1px solid #999; text-align: center; }
+  table.matrix td { padding: 6px 2px; border-bottom: 1px solid var(--line); text-align: center; }
+  table.matrix td.rl { text-align: left; }
+  .rn { display: inline-flex; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #999; font-size: 0.6rem; align-items: center; justify-content: center; margin-right: 6px; color: #666; }
+  .mdot { display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 1.3px solid #333; }
+  .slbl.mx { margin-top: 8px; }
+  /* 메타 */
+  .meta { border-left: 2px solid var(--line); padding-left: 10px; font-size: 0.74rem; color: #444; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .chip { background: var(--soft); border-radius: 3px; padding: 1px 7px; font-size: 0.68rem; color: #555; white-space: nowrap; }
+  .chip.req { background: #fdecea; color: #c0392b; }
+  .ml { margin-top: 6px; } .ml b { display: block; font-size: 0.66rem; color: var(--mute); letter-spacing: 0.05em; margin-bottom: 2px; }
+  .end { color: #c0392b; font-weight: 700; }
+  /* 인쇄 */
+  @page { size: A4; margin: 14mm 13mm 16mm; }
+  @media print {
+    body { background: #fff; font-size: 10pt; padding-bottom: 6mm; }
+    .toolbar { display: none; }
+    .doc { max-width: none; margin: 0; }
+    .page { box-shadow: none; padding: 0; margin: 0; break-before: page; }
+    .page.cover { break-before: auto; }
+    .cover { min-height: auto; height: 255mm; }
+    .sec-head { -webkit-print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span class="tb-title">SURVEY DESIGN DOCUMENT</span>
+  <label><input type="checkbox" id="metaToggle" checked onchange="document.body.classList.toggle('meta-off', !this.checked)"> 설계 정보 표시 (분기·파이핑·설정)</label>
+  <span class="note">끄면 응답지 형태로 출력됩니다</span>
+  <span class="sp"></span>
+  <button onclick="window.print()">인쇄 / PDF 저장</button>
+</div>
+<div class="doc">
+  <div class="page cover">
+    <div class="logo">${logoSrc ? `<img src="${logoSrc}" alt="">` : ''}</div>
+    <div class="kicker">SURVEY DESIGN DOCUMENT</div>
+    <h1>${esc(coverTitle)}</h1>
+    ${coverSub ? `<div class="sub">${esc(coverSub)}</div>` : ''}
+    ${coverTexts}
+    <div class="stats">${statCards}</div>
+    <div class="foot"><span>THE EROOM SPORTS · Survey Builder</span><span>출력일 ${dateStr}</span></div>
+  </div>
+  <div class="page flow-page">
+    <h2>FLOW<small>설문 진행 흐름</small></h2>
+    <div class="legend"><span>순차 진행</span><span class="lj">조건 분기 (섹션 이동)</span><span class="le">조건 분기 (설문 종료)</span></div>
+    ${flowSvg}
+    <h2 style="margin-top:22px;">SECTIONS<small>섹션 구성</small></h2>
+    <table class="stable"><tr><th class="c" style="width:32px;">#</th><th>섹션 제목</th><th class="c" style="width:80px;">문항</th><th class="c" style="width:44px;">수</th><th>분기</th></tr>${sectionTable}</table>
+  </div>
+  <div class="page">
+    <h2>QUESTIONS<small>문항 ${realQs.length}개 · 섹션 ${groups.length}개</small></h2>
+    ${bodyHtml || '<div class="muted">문항이 없습니다</div>'}
+  </div>
+  <div class="page appendix">
+    <h2>LOGIC<small>분기 규칙 전체</small></h2>
+    ${appendix}
+  </div>
+</div>
+</body>
+</html>`;
   }
 
   // ── Export ──
