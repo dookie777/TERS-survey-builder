@@ -5776,47 +5776,73 @@ renderPage();
     const keysAll = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     const esc = escHtml;
     const strip = s => stripHtml(s || '');
+    const cut = (s, n) => (s && s.length > n) ? s.slice(0, n - 1) + '…' : (s || '');
+    // 리치 텍스트 → 첫 문단(제목) / 나머지(설명)
+    const splitTitle = html => {
+      if (!html) return { title: '', desc: '' };
+      const parts = html.split(/<\/p>|<\/h[1-6]>|<\/li>/i).map(strip).map(s => s.trim()).filter(Boolean);
+      if (!parts.length) return { title: strip(html).trim(), desc: '' };
+      return { title: parts[0], desc: parts.slice(1).join(' ') };
+    };
 
     // ── 데이터 정리 ──
-    const realQs = [];                 // {q, qi, num}
-    const numOf = {};                  // qi -> Q번호
+    const realQs = [];
+    const numOf = {};
     questions.forEach((q, i) => { if (q.type !== '섹션') { realQs.push({ q, qi: i, num: realQs.length + 1 }); numOf[i] = realQs.length; } });
-    const groups = getSectionGroups(); // [[qi,...], ...]
+    const groups = getSectionGroups();
     const groupMeta = groups.map((g, gi) => {
-      let title = '';
-      for (let i = g[0] - 1; i >= 0; i--) { if (questions[i].type === '섹션') { title = strip(questions[i].text); break; } if (questions[i].type !== '섹션') break; }
-      const first = numOf[g[0]], last = numOf[g[g.length - 1]];
-      return { gi, title, first, last, count: g.length, qis: g };
+      let title = '', desc = '';
+      const prev = questions[g[0] - 1];
+      if (prev && prev.type === '섹션') { const t = splitTitle(prev.text); title = t.title; desc = t.desc; }
+      return { gi, title, desc, first: numOf[g[0]], last: numOf[g[g.length - 1]], count: g.length, qis: g };
     });
     const groupOfQi = {}; groups.forEach((g, gi) => g.forEach(qi => { groupOfQi[qi] = gi; }));
     const groupOfJump = idx => { for (let gi = 0; gi < groups.length; gi++) { if (groups[gi].some(qi => qi >= idx)) return gi; } return -1; };
-    const groupLabel = gi => (gi < 0 ? '?' : (groupMeta[gi].title ? groupMeta[gi].title : ('섹션 ' + (gi + 1))));
+    const groupLabel = gi => (gi < 0 ? '?' : (groupMeta[gi].title || ('섹션 ' + (gi + 1))));
 
-    // 로직 목록 [{fromQi, fromNum, fromGi, label(조건), action:'end'|'jump', toGi}]
+    // 규칙 목록 [{fromQi, fromNum, fromGi, kind:'opt'|'scale', oi, cond, action:'end'|'jump', toGi}]
     const rules = [];
     realQs.forEach(({ q, qi, num }) => {
       const logic = q.logic || {};
       if (q.type === '객관식' || q.type === '체크박스' || q.type === '드롭다운') {
-        Object.keys(logic).forEach(k => {
-          if (k.indexOf('opt_') !== 0 || !logic[k]) return;
-          const oi = parseInt(k.slice(4));
-          const label = (q.type === '드롭다운' ? (oi + 1) + '. ' : keysAll[oi] + '. ') + (strip(q.options[oi]) || '옵션 ' + (oi + 1));
-          const act = logic[k];
-          rules.push({ fromQi: qi, fromNum: num, fromGi: groupOfQi[qi], cond: label, condShort: q.type === '드롭다운' ? String(oi + 1) : keysAll[oi], action: act === 'end' ? 'end' : 'jump', toGi: act === 'end' ? -1 : groupOfJump(parseInt(act.slice(5))) });
+        Object.keys(logic).filter(k => k.indexOf('opt_') === 0 && logic[k]).map(k => parseInt(k.slice(4))).sort((a, b) => a - b).forEach(oi => {
+          const act = logic['opt_' + oi];
+          const key = q.type === '드롭다운' ? String(oi + 1) : (keysAll[oi] || '?');
+          rules.push({ fromQi: qi, fromNum: num, fromGi: groupOfQi[qi], kind: 'opt', oi, key, cond: key + '. ' + (strip(q.options[oi]) || '옵션 ' + (oi + 1)), action: act === 'end' ? 'end' : 'jump', toGi: act === 'end' ? -1 : groupOfJump(parseInt(act.slice(5))) });
         });
       }
       if (q.type === '척도형' && Array.isArray(logic.scaleRules)) {
         logic.scaleRules.forEach(r => {
           if (!r || !r.action) return;
-          const condWord = r.condition === 'gte' ? '이상' : r.condition === 'eq' ? '' : '이하';
-          const label = r.value + '점 ' + condWord;
           const sym = r.condition === 'gte' ? '≥' : r.condition === 'eq' ? '=' : '≤';
-          rules.push({ fromQi: qi, fromNum: num, fromGi: groupOfQi[qi], cond: label.trim(), condShort: sym + r.value, action: r.action === 'end' ? 'end' : 'jump', toGi: r.action === 'end' ? -1 : groupOfJump(parseInt(r.action.slice(5))) });
+          rules.push({ fromQi: qi, fromNum: num, fromGi: groupOfQi[qi], kind: 'scale', key: sym + r.value, cond: r.value + '점 ' + (r.condition === 'gte' ? '이상' : r.condition === 'eq' ? '' : '이하'), action: r.action === 'end' ? 'end' : 'jump', toGi: r.action === 'end' ? -1 : groupOfJump(parseInt(r.action.slice(5))) });
         });
       }
     });
+    // 같은 문항·같은 도착지 규칙 압축: "B~J" / "A, C, E" / "≤2"
+    const compressKeys = list => {
+      const opts = list.filter(r => r.kind === 'opt');
+      const scales = list.filter(r => r.kind === 'scale').map(r => r.key);
+      let out = [];
+      if (opts.length) {
+        const idxs = opts.map(r => r.oi).sort((a, b) => a - b);
+        const consecutive = idxs.every((v, i) => i === 0 || v === idxs[i - 1] + 1);
+        if (consecutive && idxs.length >= 3) out.push(opts[0].key + '~' + opts[opts.length - 1].key);
+        else out.push(opts.map(r => r.key).join(', '));
+      }
+      return out.concat(scales).join(', ');
+    };
+    // 문항별 요약 [{fromNum, fromGi, text:'Q5 B~J', action, toGi, count}]
+    const summaries = [];
+    realQs.forEach(({ num, qi }) => {
+      const mine = rules.filter(r => r.fromQi === qi);
+      const byTarget = {};
+      mine.forEach(r => { const k = r.action + ':' + r.toGi; (byTarget[k] = byTarget[k] || []).push(r); });
+      Object.values(byTarget).forEach(list => summaries.push({ fromNum: num, fromGi: groupOfQi[qi], keys: compressKeys(list), action: list[0].action, toGi: list[0].toGi, count: list.length }));
+    });
+    const sumText = s => 'Q' + s.fromNum + ' ' + s.keys + ' → ' + (s.action === 'end' ? '종료' : cut(groupLabel(s.toGi), 14));
 
-    // 파이핑 참조: refs[num] = [num이 참조하는 Q번호들], refBy[num] = [num을 참조하는 Q번호들]
+    // 파이핑 참조
     const refs = {}, refBy = {};
     const pipeRe = /\{Q(\d+)\}/g;
     realQs.forEach(({ q, num }) => {
@@ -5837,59 +5863,86 @@ renderPage();
       ['필수 문항', realQs.filter(x => x.q.required).length]
     ].map(([k, v]) => `<div class="stat"><div class="stat-v">${v}</div><div class="stat-k">${k}</div></div>`).join('');
 
-    // ── 흐름도 SVG ──
-    const nodeW = 300, nodeH = 46, gapY = 30, x0 = 24, y0 = 20;
-    const nodes = []; // {id, label, sub, y, kind}
-    if (coverActive) nodes.push({ id: 'start', label: '표지', sub: '설문 시작', kind: 'term' });
-    groupMeta.forEach((g, gi) => nodes.push({ id: 'g' + gi, label: (g.title ? g.title : '섹션 ' + (gi + 1)), sub: 'Q' + g.first + (g.first !== g.last ? ' – Q' + g.last : '') + ' · ' + g.count + '문항', kind: 'sec', gi }));
-    nodes.push({ id: 'end', label: '설문 종료', sub: '응답 제출', kind: 'term' });
-    nodes.forEach((n, i) => { n.y = y0 + i * (nodeH + gapY); });
-    const nodeById = {}; nodes.forEach(n => nodeById[n.id] = n);
-    const svgH = y0 + nodes.length * (nodeH + gapY);
-    // 분기 화살표 (우측 레인)
-    const branches = rules.map(r => ({ from: 'g' + r.fromGi, to: r.action === 'end' ? 'end' : 'g' + r.toGi, label: 'Q' + r.fromNum + ' ' + r.condShort, end: r.action === 'end' }));
-    // 동일 from→to 병합
-    const merged = {};
-    branches.forEach(b => { const k = b.from + '>' + b.to; (merged[k] = merged[k] || { from: b.from, to: b.to, end: b.end, labels: [] }).labels.push(b.label); });
-    const mergedList = Object.values(merged).filter(b => nodeById[b.from] && nodeById[b.to] && b.from !== b.to);
-    let svgPaths = '';
-    // 순차 화살표
-    for (let i = 0; i < nodes.length - 1; i++) {
-      const a = nodes[i], b = nodes[i + 1];
-      svgPaths += `<line x1="${x0 + nodeW / 2}" y1="${a.y + nodeH}" x2="${x0 + nodeW / 2}" y2="${b.y}" class="flow-seq" marker-end="url(#arr)"/>`;
-    }
-    // 분기 화살표
-    mergedList.forEach((b, li) => {
-      const a = nodeById[b.from], t = nodeById[b.to];
-      const lane = x0 + nodeW + 26 + li * 30;
-      const ya = a.y + nodeH / 2, yt = t.y + nodeH / 2;
-      const cls = b.end ? 'flow-end' : 'flow-jump';
-      svgPaths += `<path d="M ${x0 + nodeW} ${ya} H ${lane} V ${yt} H ${x0 + nodeW + 6}" class="${cls}" marker-end="url(#arr2)"/>`;
-      const ly = (ya + yt) / 2;
-      const txt = b.labels.length > 2 ? b.labels.slice(0, 2).join(', ') + ' 외 ' + (b.labels.length - 2) : b.labels.join(', ');
-      svgPaths += `<text x="${lane + 4}" y="${ly}" class="flow-lbl" transform="rotate(90 ${lane + 4} ${ly})" text-anchor="middle">${esc(txt)}${b.end ? ' → 종료' : ''}</text>`;
+    // ── 흐름 시트 (가로 페이지, SVG 한 장) ──
+    // 행 = 시작(표지) + 섹션들 + 종료. 좌: 노드, 중: 분기 레인, 우: 문항·수·분기 요약 (행 정렬)
+    const rows = [];
+    if (coverActive) rows.push({ id: 'start', kind: 'term', label: '표지', sub: '설문 시작' });
+    groupMeta.forEach((g, gi) => rows.push({ id: 'g' + gi, kind: 'sec', gi, label: g.title || '섹션 ' + (gi + 1), sub: 'Q' + g.first + (g.first !== g.last ? '–Q' + g.last : ''), range: 'Q' + g.first + (g.first !== g.last ? ' – Q' + g.last : ''), count: g.count, untitled: !g.title }));
+    rows.push({ id: 'end', kind: 'term', label: '설문 종료', sub: '응답 제출' });
+    const rowById = {}; rows.forEach(r => rowById[r.id] = r);
+    // 분기 레인 (같은 출발·도착 병합)
+    const lanesMap = {};
+    summaries.forEach(s => {
+      const from = 'g' + s.fromGi, to = s.action === 'end' ? 'end' : 'g' + s.toGi;
+      if (!rowById[from] || !rowById[to] || from === to) return;
+      const k = from + '>' + to;
+      (lanesMap[k] = lanesMap[k] || { from, to, end: s.action === 'end', n: 0 }).n += s.count;
     });
-    const svgW = x0 + nodeW + 26 + Math.max(1, mergedList.length) * 30 + 40;
-    let svgNodes = '';
-    nodes.forEach(n => {
-      const term = n.kind === 'term';
-      svgNodes += `<g class="node ${term ? 'term' : 'sec'}">
-        <rect x="${x0}" y="${n.y}" width="${nodeW}" height="${nodeH}" rx="${term ? 23 : 6}"/>
-        <text x="${x0 + 16}" y="${n.y + 20}" class="n-title">${esc(n.label.length > 26 ? n.label.slice(0, 26) + '…' : n.label)}</text>
-        <text x="${x0 + 16}" y="${n.y + 36}" class="n-sub">${esc(n.sub)}</text>
-      </g>`;
-    });
-    const flowSvg = `<svg viewBox="0 0 ${svgW} ${svgH}" width="100%" style="max-width:${svgW}px;display:block;">
-      <defs>
-        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker>
-        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${accent}"/></marker>
-      </defs>${svgPaths}${svgNodes}</svg>`;
+    const lanes = Object.values(lanesMap);
+    // 치수: 가로 A4 콘텐츠 폭 ≈ 1030px, 높이 ≈ 640px (헤더 제외)
+    const W = 1030;
+    const availH = 615; // 가로 A4 콘텐츠 폭 273mm 기준, 높이가 약 163mm를 넘지 않도록
+    const NROW = rows.length;
+    const pitch = Math.max(22, Math.min(46, Math.floor(availH / NROW)));
+    const nodeH = Math.round(pitch * 0.72);
+    const gap = pitch - nodeH;
+    const nodeW = 230, x0 = 4, y0 = 10;
+    const laneX0 = x0 + nodeW + 18;
+    const laneStep = Math.max(9, Math.min(16, Math.floor(150 / Math.max(1, lanes.length))));
+    const lanesW = Math.max(40, lanes.length * laneStep + 14);
+    const colRange = laneX0 + lanesW + 14;   // 문항 범위 열
+    const colCount = colRange + 90;           // 문항 수 열
+    const colBranch = colCount + 40;          // 분기 요약 열
+    const fs = pitch >= 40 ? 11 : pitch >= 30 ? 10 : 9;
+    const fsSub = fs - 2;
+    rows.forEach((r, i) => { r.y = y0 + i * pitch; r.cy = r.y + nodeH / 2; });
+    const H = y0 + NROW * pitch + 4;
 
-    const sectionTable = groupMeta.map((g, gi) => {
-      const br = rules.filter(r => r.fromGi === gi);
-      const brTxt = br.length ? br.map(r => 'Q' + r.fromNum + ' ' + r.condShort + (r.action === 'end' ? ' → 종료' : ' → ' + groupLabel(r.toGi))).join('<br>') : '<span class="muted">—</span>';
-      return `<tr><td class="c">${gi + 1}</td><td>${esc(g.title) || '<span class="muted">(제목 없음)</span>'}</td><td class="c">Q${g.first}${g.first !== g.last ? '–Q' + g.last : ''}</td><td class="c">${g.count}</td><td>${brTxt}</td></tr>`;
-    }).join('');
+    let svg = '';
+    // 행 배경 줄 (가독성)
+    rows.forEach((r, i) => { if (i % 2 === 1) svg += `<rect x="${laneX0 - 8}" y="${r.y - gap / 2}" width="${W - laneX0 + 8}" height="${pitch}" fill="#f7f7f7"/>`; });
+    // 열 머리글
+    const headY = y0 - 3;
+    svg += `<text x="${colRange}" y="${headY}" class="hd">문항</text><text x="${colCount}" y="${headY}" class="hd">수</text><text x="${colBranch}" y="${headY}" class="hd">분기 (조건 → 도착)</text>`;
+    // 순차 화살표
+    for (let i = 0; i < rows.length - 1; i++) {
+      const a = rows[i], b = rows[i + 1];
+      svg += `<line x1="${x0 + 26}" y1="${a.y + nodeH}" x2="${x0 + 26}" y2="${b.y}" class="seq" marker-end="url(#arr)"/>`;
+    }
+    // 분기 레인
+    lanes.forEach((ln, li) => {
+      const a = rowById[ln.from], b = rowById[ln.to];
+      const lx = laneX0 + li * laneStep + 6;
+      const cls = ln.end ? 'br-end' : 'br-jump';
+      svg += `<path d="M ${x0 + nodeW} ${a.cy} H ${lx} V ${b.cy} H ${x0 + nodeW + 4}" class="${cls}" marker-end="url(#arr2)"/>`;
+      svg += `<circle cx="${lx}" cy="${a.cy}" r="2.6" fill="${accent}"/>`;
+    });
+    // 노드 + 우측 텍스트
+    rows.forEach(r => {
+      const term = r.kind === 'term';
+      const maxCh = Math.floor((nodeW - 44) / (fs * 0.95));
+      svg += `<g class="node ${term ? 'term' : 'sec'}"><rect x="${x0}" y="${r.y}" width="${nodeW}" height="${nodeH}" rx="${term ? nodeH / 2 : 4}"/>`;
+      if (pitch >= 30) {
+        svg += `<text x="${x0 + 12}" y="${r.y + nodeH / 2 - 2}" class="n-t" font-size="${fs}">${esc(cut(r.label, maxCh))}</text><text x="${x0 + 12}" y="${r.y + nodeH / 2 + fsSub + 1}" class="n-s" font-size="${fsSub}">${esc(r.sub)}</text>`;
+      } else {
+        svg += `<text x="${x0 + 12}" y="${r.cy + fs * 0.36}" class="n-t" font-size="${fs}">${esc(cut(r.label, maxCh))}</text>`;
+      }
+      svg += `</g>`;
+      if (r.kind === 'sec') {
+        const my = summaries.filter(s => s.fromGi === r.gi).map(sumText);
+        const maxBr = Math.floor((W - colBranch) / (fs * 0.62));
+        let brTxt = my.length ? my.join(' · ') : '—';
+        if (brTxt.length > maxBr) brTxt = cut(brTxt, maxBr);
+        svg += `<text x="${colRange}" y="${r.cy + fs * 0.36}" class="cell" font-size="${fs}">${esc(r.range)}</text>`;
+        svg += `<text x="${colCount}" y="${r.cy + fs * 0.36}" class="cell" font-size="${fs}">${r.count}</text>`;
+        svg += `<text x="${colBranch}" y="${r.cy + fs * 0.36}" class="cell ${my.length ? 'br' : 'mute'}" font-size="${fs}">${esc(brTxt)}</text>`;
+      }
+    });
+    const flowSvg = `<div class="flow-wrap" style="width:273mm;height:${(273 * H / W).toFixed(1)}mm;"><svg viewBox="0 0 ${W} ${H}" class="flow-svg" style="width:100%;height:100%;">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${accent}"/></marker>
+      </defs>${svg}</svg></div>`;
 
     // ── 문항 렌더 ──
     const typeName = t => t === '객관식' ? '객관식 (단일 선택)' : t === '체크박스' ? '체크박스 (다중 선택)' : t;
@@ -5902,17 +5955,19 @@ renderPage();
     };
     const buildAnswer = (q, qi, num) => {
       const logic = q.logic || {};
-      const tag = oi => { const a = logic['opt_' + oi]; if (!a) return ''; return `<span class="ltag">${a === 'end' ? '→ 설문 종료' : '→ ' + esc(groupLabel(groupOfJump(parseInt(a.slice(5)))))}</span>`; };
+      const tag = oi => { const a = logic['opt_' + oi]; if (!a) return ''; return `<span class="ltag">${a === 'end' ? '→ 설문 종료' : '→ ' + esc(cut(groupLabel(groupOfJump(parseInt(a.slice(5)))), 16))}</span>`; };
       if (q.type === '단답형') return `<div class="ans-line"></div>`;
       if (q.type === '장문형') return `<div class="ans-box"></div>`;
       if (q.type === '객관식' || q.type === '체크박스') {
         const shape = q.type === '체크박스' ? 'sq' : 'ci';
         let n = q.options.length;
-        let rows = q.options.map((o, oi) => `<li><span class="mk ${shape}">${keysAll[oi] || ''}</span><span class="otxt">${esc(o) || '옵션 ' + (oi + 1)}</span>${tag(oi)}</li>`).join('');
-        if (q.hasEtc) { rows += `<li><span class="mk ${shape}">${keysAll[n++] || '·'}</span><span class="otxt">기타 <span class="etc-line"></span></span></li>`; }
-        if (q.hasNone) { rows += `<li><span class="mk ${shape}">${keysAll[n++] || '·'}</span><span class="otxt">없음</span></li>`; }
+        let items = q.options.map((o, oi) => `<li><span class="mk ${shape}">${keysAll[oi] || ''}</span><span class="otxt">${esc(o) || '옵션 ' + (oi + 1)}</span>${tag(oi)}</li>`).join('');
+        if (q.hasEtc) items += `<li><span class="mk ${shape}">${keysAll[n++] || '·'}</span><span class="otxt">기타 <span class="etc-line"></span></span></li>`;
+        if (q.hasNone) items += `<li><span class="mk ${shape}">${keysAll[n++] || '·'}</span><span class="otxt">없음</span></li>`;
         const hint = q.type === '체크박스' && q.maxCheck ? `<div class="hint">${q.priority ? '우선순위' : '최대'} ${q.maxCheck}개 선택</div>` : '';
-        return `${hint}<ul class="opts">${rows}</ul>`;
+        const hasTag = Object.keys(logic).some(k => k.indexOf('opt_') === 0 && logic[k]);
+        const twoCol = n >= 8 && !hasTag && q.options.every(o => strip(o).length <= 14);
+        return `${hint}<ul class="opts${twoCol ? ' two' : ''}">${items}</ul>`;
       }
       if (q.type === '드롭다운') {
         return `<div class="hint">드롭다운 선택</div><ul class="opts dd">${q.options.map((o, oi) => `<li><span class="mk num">${oi + 1}</span><span class="otxt">${esc(o) || '옵션 ' + (oi + 1)}</span>${tag(oi)}</li>`).join('')}</ul>`;
@@ -5932,17 +5987,18 @@ renderPage();
       const chips = [];
       chips.push(`<span class="chip">${esc(typeName(q.type))}</span>`);
       if (q.required) chips.push(`<span class="chip req">필수</span>`);
-      if (q.shuffle) chips.push(`<span class="chip">선택지 무작위</span>`);
+      const isOpt = q.type === '객관식' || q.type === '체크박스' || q.type === '드롭다운';
+      if (isOpt && q.shuffle) chips.push(`<span class="chip">선택지 무작위</span>`);
       if (q.type === '체크박스' && q.maxCheck) chips.push(`<span class="chip">최대 ${q.maxCheck}개</span>`);
       if (q.type === '체크박스' && q.priority) chips.push(`<span class="chip">우선순위 모드</span>`);
-      if (q.hasEtc) chips.push(`<span class="chip">기타 입력</span>`);
-      if (q.hasNone) chips.push(`<span class="chip">없음 선택지</span>`);
+      if (isOpt && q.type !== '드롭다운' && q.hasEtc) chips.push(`<span class="chip">기타 입력</span>`);
+      if (isOpt && q.type !== '드롭다운' && q.hasNone) chips.push(`<span class="chip">없음 선택지</span>`);
       if (q.media && q.media.src) chips.push(`<span class="chip">${q.media.type === 'video' ? '영상' : '이미지'} 첨부</span>`);
       const lines = [];
-      const myRules = rules.filter(r => r.fromQi === qi);
-      if (myRules.length) lines.push(`<div class="ml"><b>분기</b>${myRules.map(r => `<div>${esc(r.cond)} → ${r.action === 'end' ? '<span class="end">설문 종료</span>' : esc(groupLabel(r.toGi))}</div>`).join('')}</div>`);
+      const my = summaries.filter(s => s.fromNum === num);
+      if (my.length) lines.push(`<div class="ml"><b>분기</b>${my.map(s => `<div>${esc(s.keys)}${s.count > 1 ? ' <span class="cnt">(' + s.count + '개)</span>' : ''} → ${s.action === 'end' ? '<span class="end">설문 종료</span>' : esc(groupLabel(s.toGi))}</div>`).join('')}</div>`);
       if (refs[num] && refs[num].length) lines.push(`<div class="ml"><b>파이핑</b><div>${refs[num].map(t => 'Q' + t).join(', ')} 응답 삽입</div></div>`);
-      if (refBy[num] && refBy[num].length) lines.push(`<div class="ml"><b>참조됨</b><div>${refBy[num].map(t => 'Q' + t).join(', ')}에서 {Q${num}}로 사용</div></div>`);
+      if (refBy[num] && refBy[num].length) lines.push(`<div class="ml"><b>참조됨</b><div>${refBy[num].map(t => 'Q' + t).join(', ')}에서 {Q${num}} 사용</div></div>`);
       return `<div class="meta"><div class="chips">${chips.join('')}</div>${lines.join('')}</div>`;
     };
     const buildQ = ({ q, qi, num }) => {
@@ -5953,6 +6009,7 @@ renderPage();
         : '';
       const pos = (q.mediaPosition || 'below');
       return `<div class="q">
+        ${buildMeta(q, qi, num)}
         <div class="q-main">
           <div class="q-head"><span class="q-num">Q${num}</span><span class="q-type">${esc(typeName(q.type))}</span>${q.required ? '<span class="q-req">* 필수</span>' : ''}</div>
           ${pos === 'above' ? media : ''}
@@ -5961,18 +6018,16 @@ renderPage();
           ${pos === 'below' ? media : ''}
           <div class="q-ans">${buildAnswer(q, qi, num)}</div>
         </div>
-        ${buildMeta(q, qi, num)}
       </div>`;
     };
-    const bodyHtml = groupMeta.map((g, gi) => {
-      return `<div class="sec">
+    const bodyHtml = groupMeta.map((g, gi) => `<div class="sec">
         <div class="sec-head"><span class="sec-n">SECTION ${gi + 1}</span><span class="sec-t">${esc(g.title) || '<span class="muted">(섹션 제목 없음)</span>'}</span><span class="sec-r">Q${g.first}${g.first !== g.last ? ' – Q' + g.last : ''}</span></div>
+        ${g.desc ? `<div class="sec-desc">${esc(g.desc)}</div>` : ''}
         ${g.qis.map(qi => buildQ({ q: questions[qi], qi, num: numOf[qi] })).join('')}
-      </div>`;
-    }).join('');
+      </div>`).join('');
 
     const appendix = rules.length
-      ? `<table class="ltable"><tr><th>문항</th><th>조건</th><th>동작</th><th>이동 대상</th></tr>${rules.map(r => `<tr><td class="c">Q${r.fromNum}</td><td>${esc(r.cond)}</td><td class="c">${r.action === 'end' ? '<span class="end">설문 종료</span>' : '섹션 이동'}</td><td>${r.action === 'end' ? '—' : esc(groupLabel(r.toGi))}</td></tr>`).join('')}</table>`
+      ? `<table class="ltable"><tr><th style="width:52px;">문항</th><th>조건</th><th style="width:80px;">동작</th><th style="width:34%;">이동 대상</th></tr>${rules.map(r => `<tr><td class="c">Q${r.fromNum}</td><td>${esc(r.cond)}</td><td class="c">${r.action === 'end' ? '<span class="end">설문 종료</span>' : '섹션 이동'}</td><td>${r.action === 'end' ? '—' : esc(groupLabel(r.toGi))}</td></tr>`).join('')}</table>`
       : `<div class="muted">설정된 분기 규칙이 없습니다</div>`;
 
     return `<!DOCTYPE html>
@@ -5993,8 +6048,9 @@ renderPage();
   .toolbar .sp { flex: 1; }
   .toolbar button { background: var(--ac); color: #fff; border: none; border-radius: 6px; padding: 8px 18px; font-family: inherit; font-weight: 700; cursor: pointer; font-size: 0.85rem; }
   .toolbar .note { color: #999; font-size: 0.75rem; }
-  .doc { max-width: 210mm; margin: 24px auto 60px; }
-  .page { background: #fff; padding: 18mm 16mm; box-shadow: 0 2px 14px rgba(0,0,0,0.12); margin-bottom: 20px; }
+  .doc { max-width: 297mm; margin: 24px auto 60px; }
+  .page { background: #fff; width: 210mm; margin: 0 auto 20px; padding: 18mm 16mm; box-shadow: 0 2px 14px rgba(0,0,0,0.12); }
+  .page.landscape { width: 297mm; padding: 12mm 12mm; }
   .muted { color: var(--mute); }
   .c { text-align: center; }
   /* 표지 */
@@ -6010,63 +6066,74 @@ renderPage();
   .stat-k { font-size: 0.75rem; color: var(--mute); margin-top: 4px; }
   .cover .foot { margin-top: auto; font-size: 0.78rem; color: var(--mute); display: flex; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 10px; }
   /* 공통 헤딩 */
-  h2 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.3rem; color: var(--ink); border-bottom: 2px solid var(--ink); padding-bottom: 6px; margin-bottom: 14px; }
+  h2 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.3rem; color: var(--ink); border-bottom: 2px solid var(--ink); padding-bottom: 6px; margin-bottom: 14px; break-after: avoid; }
   h2 small { font-family: 'Noto Sans KR', sans-serif; letter-spacing: 0; font-size: 0.8rem; font-weight: 400; color: var(--mute); margin-left: 10px; }
-  /* 흐름도 */
-  .flow-seq { stroke: #333; stroke-width: 1.5; }
-  .flow-jump { fill: none; stroke: var(--ac); stroke-width: 1.5; }
-  .flow-end { fill: none; stroke: var(--ac); stroke-width: 1.5; stroke-dasharray: 4 3; }
-  .flow-lbl { font-size: 10px; fill: var(--ac); font-family: 'Noto Sans KR', sans-serif; }
-  .node.sec rect { fill: #fff; stroke: #333; stroke-width: 1.5; }
-  .node.term rect { fill: #111; stroke: #111; }
-  .node .n-title { font-size: 12px; font-weight: 700; fill: #111; font-family: 'Noto Sans KR', sans-serif; }
-  .node .n-sub { font-size: 9.5px; fill: #777; font-family: 'Noto Sans KR', sans-serif; }
-  .node.term .n-title { fill: #fff; } .node.term .n-sub { fill: #bbb; }
-  .legend { display: flex; gap: 18px; font-size: 0.75rem; color: var(--mute); margin: 8px 0 18px; }
+  /* 흐름 시트 */
+  .flow-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .legend { display: flex; gap: 18px; font-size: 0.72rem; color: var(--mute); }
   .legend span::before { content: ''; display: inline-block; width: 22px; height: 0; border-top: 2px solid #333; margin-right: 6px; vertical-align: middle; }
   .legend .lj::before { border-color: var(--ac); }
   .legend .le::before { border-color: var(--ac); border-top-style: dashed; }
-  table.stable, table.ltable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  table.stable th, table.ltable th { background: var(--soft); text-align: left; padding: 7px 8px; border-bottom: 1px solid #999; font-weight: 700; }
-  table.stable td, table.ltable td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .flow-wrap { overflow: hidden; margin-top: 6px; break-inside: avoid; }
+  .flow-svg { display: block; font-family: 'Noto Sans KR', sans-serif; }
+  .flow-svg .seq { stroke: #333; stroke-width: 1.4; }
+  .flow-svg .br-jump { fill: none; stroke: var(--ac); stroke-width: 1.3; }
+  .flow-svg .br-end { fill: none; stroke: var(--ac); stroke-width: 1.3; stroke-dasharray: 4 3; }
+  .flow-svg .node.sec rect { fill: #fff; stroke: #333; stroke-width: 1.3; }
+  .flow-svg .node.term rect { fill: #111; stroke: #111; }
+  .flow-svg .n-t { font-weight: 700; fill: #111; }
+  .flow-svg .n-s { fill: #777; }
+  .flow-svg .node.term .n-t { fill: #fff; } .flow-svg .node.term .n-s { fill: #bbb; }
+  .flow-svg .hd { font-size: 9px; font-weight: 700; fill: #999; letter-spacing: 0.04em; }
+  .flow-svg .cell { fill: #222; }
+  .flow-svg .cell.br { fill: var(--ac); font-weight: 500; }
+  .flow-svg .cell.mute { fill: #bbb; }
+  table.ltable { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.ltable th { background: var(--soft); text-align: left; padding: 7px 8px; border-bottom: 1px solid #999; font-weight: 700; }
+  table.ltable td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.ltable tr { break-inside: avoid; }
   /* 본문 */
-  .sec { break-inside: auto; margin-bottom: 8mm; }
-  .sec-head { display: flex; align-items: baseline; gap: 12px; background: #111; color: #fff; padding: 8px 12px; border-radius: 4px; margin-bottom: 10px; break-after: avoid; }
+  .sec { margin-bottom: 8mm; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; background: #111; color: #fff; padding: 8px 12px; border-radius: 4px; margin-bottom: 10px; break-after: avoid; break-inside: avoid; }
   .sec-n { font-family: 'Bebas Neue', sans-serif; letter-spacing: 2px; color: var(--ac); font-size: 1rem; }
-  .sec-t { font-weight: 700; font-size: 0.95rem; flex: 1; }
-  .sec-r { font-size: 0.75rem; color: #bbb; }
-  .q { display: grid; grid-template-columns: 1fr 50mm; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); break-inside: avoid; }
-  body.meta-off .q { grid-template-columns: 1fr; }
-  body.meta-off .meta, body.meta-off .ltag, body.meta-off .flow-page, body.meta-off .appendix { display: none !important; }
+  .sec-t { font-weight: 700; font-size: 0.95rem; flex: 1; word-break: keep-all; }
+  .sec-r { font-size: 0.75rem; color: #bbb; white-space: nowrap; }
+  .sec-desc { font-size: 0.8rem; color: #555; margin: -4px 0 12px 2px; word-break: keep-all; break-after: avoid; }
+  .q { padding: 12px 0; border-bottom: 1px solid var(--line); overflow: visible; }
+  .q::after { content: ''; display: block; clear: both; }
+  .meta { float: right; width: 50mm; margin: 2px 0 8px 14px; border-left: 2px solid var(--line); padding-left: 10px; font-size: 0.74rem; color: #444; break-inside: avoid; }
+  body.meta-off .meta, body.meta-off .ltag, body.meta-off .appendix { display: none !important; }
   body.meta-off .pipe { background: none; color: inherit; font-weight: inherit; }
-  .q-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  body.meta-off .flow-svg .cell.br, body.meta-off .flow-svg .br-jump, body.meta-off .flow-svg .br-end, body.meta-off .flow-svg circle { display: none; }
+  .q-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; break-after: avoid; }
   .q-num { font-family: 'Bebas Neue', sans-serif; font-size: 1.15rem; letter-spacing: 1px; color: var(--ac); }
   .q-type { font-size: 0.7rem; color: var(--mute); letter-spacing: 0.04em; }
   .q-req { font-size: 0.7rem; color: #c0392b; }
-  .q-text { font-size: 1rem; font-weight: 600; word-break: keep-all; }
+  .q-text { font-size: 1rem; font-weight: 600; word-break: keep-all; break-after: avoid; }
   .q-desc { font-size: 0.85rem; color: #555; margin-top: 3px; word-break: keep-all; }
   .q-text p, .q-desc p { margin: 0; } .ql-align-center { text-align: center; } .ql-align-right { text-align: right; }
   .q-text ul, .q-text ol, .q-desc ul, .q-desc ol { padding-left: 1.4em; }
   .pipe { background: #fff1e8; color: var(--ac); font-weight: 700; padding: 0 3px; border-radius: 3px; }
-  .media { margin: 8px 0; } .media img { max-width: 100%; max-height: 60mm; border-radius: 4px; border: 1px solid var(--line); }
+  .media { margin: 8px 0; break-inside: avoid; } .media img { max-width: 100%; max-height: 60mm; border-radius: 4px; border: 1px solid var(--line); }
   .media-note { font-size: 0.78rem; color: var(--mute); margin: 6px 0; word-break: break-all; }
-  .q-ans { margin-top: 10px; }
-  .ans-line { height: 9mm; border-bottom: 1px solid #333; }
-  .ans-box { height: 28mm; border: 1px solid #333; border-radius: 3px; }
+  .q-ans { margin-top: 10px; break-before: avoid; }
+  .ans-line { height: 9mm; border-bottom: 1px solid #333; break-inside: avoid; }
+  .ans-box { height: 28mm; border: 1px solid #333; border-radius: 3px; break-inside: avoid; }
   .hint { font-size: 0.72rem; color: var(--mute); margin-bottom: 6px; }
-  ul.opts { list-style: none; display: flex; flex-direction: column; gap: 6px; }
-  ul.opts li { display: flex; align-items: center; gap: 9px; font-size: 0.92rem; }
+  ul.opts { list-style: none; display: flex; flex-direction: column; gap: 6px; break-inside: avoid; }
+  ul.opts.two { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+  ul.opts li { display: flex; align-items: center; gap: 9px; font-size: 0.92rem; break-inside: avoid; }
   .mk { width: 20px; height: 20px; border: 1.3px solid #333; display: inline-flex; align-items: center; justify-content: center; font-size: 0.62rem; font-weight: 700; color: #333; flex-shrink: 0; }
   .mk.ci { border-radius: 50%; } .mk.sq { border-radius: 3px; } .mk.num { border-radius: 3px; border-color: #bbb; color: #777; }
   .otxt { flex: 1; }
   .etc-line { display: inline-block; width: 60mm; border-bottom: 1px solid #333; height: 0.9em; vertical-align: bottom; margin-left: 4px; }
   .ltag { font-size: 0.7rem; color: var(--ac); border: 1px solid var(--ac); border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
-  .scale { margin-top: 4px; }
+  .scale { margin-top: 4px; break-inside: avoid; }
   .sdots { display: flex; justify-content: space-between; gap: 4px; }
   .sdot { width: 30px; height: 30px; border-radius: 50%; border: 1.3px solid #333; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; }
   .slbl { display: flex; justify-content: space-between; font-size: 0.75rem; color: #444; margin-top: 6px; }
   .slbl .mid { text-align: center; } .slbl span:last-child { text-align: right; } .slbl span { flex: 1; }
-  table.matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; break-inside: avoid; }
   table.matrix th { font-size: 0.7rem; font-weight: 700; color: #333; padding: 4px 2px; border-bottom: 1px solid #999; text-align: center; }
   table.matrix td { padding: 6px 2px; border-bottom: 1px solid var(--line); text-align: center; }
   table.matrix td.rl { text-align: left; }
@@ -6074,20 +6141,23 @@ renderPage();
   .mdot { display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 1.3px solid #333; }
   .slbl.mx { margin-top: 8px; }
   /* 메타 */
-  .meta { border-left: 2px solid var(--line); padding-left: 10px; font-size: 0.74rem; color: #444; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
   .chip { background: var(--soft); border-radius: 3px; padding: 1px 7px; font-size: 0.68rem; color: #555; white-space: nowrap; }
   .chip.req { background: #fdecea; color: #c0392b; }
   .ml { margin-top: 6px; } .ml b { display: block; font-size: 0.66rem; color: var(--mute); letter-spacing: 0.05em; margin-bottom: 2px; }
+  .ml .cnt { color: var(--mute); }
   .end { color: #c0392b; font-weight: 700; }
   /* 인쇄 */
-  @page { size: A4; margin: 14mm 13mm 16mm; }
+  @page { size: A4 portrait; margin: 14mm 13mm 16mm; }
+  @page flow { size: A4 landscape; margin: 11mm 12mm; }
+  .page.landscape { page: flow; }
   @media print {
-    body { background: #fff; font-size: 10pt; padding-bottom: 6mm; }
+    body { background: #fff; font-size: 10pt; }
     .toolbar { display: none; }
     .doc { max-width: none; margin: 0; }
-    .page { box-shadow: none; padding: 0; margin: 0; break-before: page; }
+    .page { box-shadow: none; padding: 0; margin: 0; width: auto; break-before: page; }
     .page.cover { break-before: auto; }
+    .page.landscape { width: auto; padding: 0; }
     .cover { min-height: auto; height: 255mm; }
     .sec-head { -webkit-print-color-adjust: exact; }
   }
@@ -6097,7 +6167,7 @@ renderPage();
 <div class="toolbar">
   <span class="tb-title">SURVEY DESIGN DOCUMENT</span>
   <label><input type="checkbox" id="metaToggle" checked onchange="document.body.classList.toggle('meta-off', !this.checked)"> 설계 정보 표시 (분기·파이핑·설정)</label>
-  <span class="note">끄면 응답지 형태로 출력됩니다</span>
+  <span class="note">끄면 응답지 형태로 출력됩니다 · 흐름 시트는 가로 페이지로 인쇄됩니다</span>
   <span class="sp"></span>
   <button onclick="window.print()">인쇄 / PDF 저장</button>
 </div>
@@ -6111,19 +6181,18 @@ renderPage();
     <div class="stats">${statCards}</div>
     <div class="foot"><span>THE EROOM SPORTS · Survey Builder</span><span>출력일 ${dateStr}</span></div>
   </div>
-  <div class="page flow-page">
-    <h2>FLOW<small>설문 진행 흐름</small></h2>
-    <div class="legend"><span>순차 진행</span><span class="lj">조건 분기 (섹션 이동)</span><span class="le">조건 분기 (설문 종료)</span></div>
+  <div class="page landscape flow-page">
+    <div class="flow-head"><h2 style="border:none;margin:0;padding:0;">FLOW<small>설문 진행 흐름 · 섹션 ${groups.length}개 · 분기 규칙 ${rules.length}개</small></h2>
+      <div class="legend"><span>순차 진행</span><span class="lj">조건 분기 (섹션 이동)</span><span class="le">조건 분기 (설문 종료)</span></div></div>
+    <div style="border-top:2px solid #111;margin-top:6px;"></div>
     ${flowSvg}
-    <h2 style="margin-top:22px;">SECTIONS<small>섹션 구성</small></h2>
-    <table class="stable"><tr><th class="c" style="width:32px;">#</th><th>섹션 제목</th><th class="c" style="width:80px;">문항</th><th class="c" style="width:44px;">수</th><th>분기</th></tr>${sectionTable}</table>
   </div>
   <div class="page">
     <h2>QUESTIONS<small>문항 ${realQs.length}개 · 섹션 ${groups.length}개</small></h2>
     ${bodyHtml || '<div class="muted">문항이 없습니다</div>'}
   </div>
   <div class="page appendix">
-    <h2>LOGIC<small>분기 규칙 전체</small></h2>
+    <h2>LOGIC<small>분기 규칙 전체 ${rules.length}건</small></h2>
     ${appendix}
   </div>
 </div>
