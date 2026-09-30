@@ -314,6 +314,23 @@
     .deploy-popup-btn:hover { background: var(--border-hover); }
     .deploy-popup-copied { font-size: 0.72rem; color: #6fcf6f; margin-top: 6px; display: none; }
     .deploy-popup-copied.show { display: block; }
+    .deploy-popup { min-width: 400px; }
+    .deploy-popup-primary { background: var(--accent); color: var(--accent-on); border-color: var(--accent); font-weight: 700; }
+    .deploy-popup-primary:hover { background: var(--accent-light); }
+    .deploy-popup-primary:disabled { opacity: 0.5; cursor: wait; }
+    .deploy-popup-sub { font-size: 0.72rem; color: var(--text-muted); }
+    .deploy-popup-gear { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.72rem; font-family: var(--font-body); padding: 2px 4px; }
+    .deploy-popup-gear:hover { color: var(--text-primary); }
+    .deploy-popup-status { font-size: 0.72rem; color: var(--text-secondary); margin-top: 8px; min-height: 1em; line-height: 1.5; }
+    .deploy-popup-status.ok { color: #6fcf6f; }
+    .deploy-popup-status.err { color: #eb5757; }
+    .deploy-settings-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 400; align-items: center; justify-content: center; }
+    .deploy-settings-overlay.open { display: flex; }
+    .deploy-settings-box { background: var(--bg-secondary); border: 1px solid var(--border-accent); border-radius: var(--radius-md); padding: 22px 24px; width: 460px; max-width: 92vw; }
+    .deploy-settings-box .ds-title { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+    .deploy-settings-box .ds-desc { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5; }
+    .deploy-settings-box .ds-label { font-size: 0.7rem; color: var(--text-muted); margin: 10px 0 4px; }
+    .deploy-settings-box .field-input { height: 34px; font-size: 0.8rem; }
 
     /* ── Layout ── */
     .workspace {
@@ -1855,13 +1872,24 @@
       </button>
       <button class="btn btn-primary" id="btnDeploy" onclick="deployOrShowLink(event)">배포하기</button>
       <div class="deploy-popup" id="deployPopup">
-        <div class="deploy-popup-title">배포 링크</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div class="deploy-popup-title" style="margin:0;">배포</div>
+          <button class="deploy-popup-gear" onclick="openDeploySettings()" title="배포 설정">⚙ 설정</button>
+        </div>
+        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:4px;">파일명 (영문·숫자·하이픈)</div>
+        <input id="deployFileName" class="field-input" style="height:32px;font-size:0.78rem;margin-bottom:8px;" oninput="syncDeployFileName()" spellcheck="false">
         <div class="deploy-popup-url" id="deployUrlText"></div>
         <div style="display:flex;gap:8px;margin-top:10px;">
-          <button class="deploy-popup-btn" onclick="copyDeployUrl()">링크 복사</button>
-          <button class="deploy-popup-btn" onclick="openDeployUrl()">새 탭에서 열기</button>
+          <button class="deploy-popup-btn deploy-popup-primary" id="btnDeployGh" onclick="deployToGithub()">GitHub에 배포</button>
+          <button class="deploy-popup-btn" onclick="copyDeployLink()">링크 복사</button>
+          <button class="deploy-popup-btn" onclick="openDeployLink()">링크 열기</button>
         </div>
         <div class="deploy-popup-copied" id="deployCopied">복사되었습니다</div>
+        <div class="deploy-popup-status" id="deployStatus"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+          <button class="deploy-popup-btn deploy-popup-sub" onclick="copyDeployUrl()">HTML 다운로드</button>
+          <button class="deploy-popup-btn deploy-popup-sub" onclick="openDeployUrl()">미리 열기</button>
+        </div>
       </div>
     </div>
   </header>
@@ -1914,6 +1942,27 @@
   </div>
 
   <!-- Add Question Modal -->
+  <div class="deploy-settings-overlay" id="deploySettings" onclick="if(event.target===this)closeDeploySettings()">
+    <div class="deploy-settings-box">
+      <div class="ds-title">배포 설정</div>
+      <div class="ds-desc">배포하기 버튼이 GitHub 저장소에 설문 HTML을 올리고, Vercel이 자동 배포한 링크를 만듭니다. 토큰은 이 브라우저에만 저장됩니다.</div>
+      <div class="ds-label">GitHub 저장소 (owner/repo)</div>
+      <input id="dsRepo" class="field-input" spellcheck="false">
+      <div class="ds-label">브랜치</div>
+      <input id="dsBranch" class="field-input" spellcheck="false">
+      <div class="ds-label">배포 주소 (Vercel)</div>
+      <input id="dsBase" class="field-input" spellcheck="false">
+      <div class="ds-label">GitHub 토큰 (github_pat_…)</div>
+      <input id="dsToken" class="field-input" type="password" spellcheck="false" placeholder="저장된 토큰이 있으면 비워두십시오">
+      <div id="dsTokenState" style="font-size:0.7rem;color:var(--text-muted);margin-top:4px;"></div>
+      <div style="display:flex;gap:8px;margin-top:18px;">
+        <button class="deploy-popup-btn deploy-popup-primary" onclick="saveDeploySettings()">저장</button>
+        <button class="deploy-popup-btn" onclick="testDeploySettings()">연결 테스트</button>
+        <button class="deploy-popup-btn" onclick="closeDeploySettings()">닫기</button>
+      </div>
+      <div class="deploy-popup-status" id="dsStatus"></div>
+    </div>
+  </div>
   <div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
     <div class="modal">
       <div class="modal-title">질문 유형 선택</div>
@@ -4411,7 +4460,10 @@
       createdAt: surveys[id]?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       status: surveys[id]?.status || 'active',
-      deployId: window._surveyDeployId || null
+      deployId: window._surveyDeployId || null,
+      deployFile: window._surveyDeployFile || surveys[id]?.deployFile || null,
+      deployUrl: window._surveyDeployUrl || surveys[id]?.deployUrl || null,
+      deployedAt: window._surveyDeployedAt || surveys[id]?.deployedAt || null
     };
     localStorage.setItem('surveys', JSON.stringify(surveys));
     // 저장 완료 피드백
@@ -4432,6 +4484,9 @@
     if (!s) return;
     window._surveyId = id;
     window._surveyDeployId = s.deployId;
+    window._surveyDeployFile = s.deployFile || null;
+    window._surveyDeployUrl = s.deployUrl || null;
+    window._surveyDeployedAt = s.deployedAt || null;
     document.getElementById('surveyTitle').value = s.title || '새 설문지';
     cover = s.cover || { logo: null, title: '', subtitle: '', blocks: [], startLabel: '설문 시작' };
     coverActive = s.coverActive || false;
@@ -4452,20 +4507,183 @@
     }
     const surveyId = window._surveyDeployId;
     window._currentDeployData = { title, cover, coverActive, questions, surveyId, startGroupIndex: coverActive ? -1 : 0 };
-    document.getElementById('deployUrlText').textContent = '배포 파일을 다운로드하거나 새 탭에서 확인하십시오';
+    const fnInput = document.getElementById('deployFileName');
+    fnInput.value = window._surveyDeployFile || suggestDeployFileName(title, surveyId);
+    syncDeployFileName();
+    const st = document.getElementById('deployStatus'); st.className = 'deploy-popup-status';
+    st.textContent = window._surveyDeployUrl ? ('마지막 배포 ' + (window._surveyDeployedAt ? new Date(window._surveyDeployedAt).toLocaleString('ko-KR') : '')) : (getDeployCfg().token ? '아직 배포되지 않았습니다' : '⚙ 설정에서 GitHub 토큰을 먼저 등록하십시오');
     const popup = document.getElementById('deployPopup');
     const isOpen = popup.classList.contains('open');
     popup.classList.toggle('open');
     if (!isOpen) {
       setTimeout(() => {
         document.addEventListener('click', function handler(ev) {
-          if (!ev.target.closest('#deployPopup') && !ev.target.closest('#btnDeploy')) {
+          if (!ev.target.closest('#deployPopup') && !ev.target.closest('#btnDeploy') && !ev.target.closest('#deploySettings')) {
             popup.classList.remove('open');
             document.removeEventListener('click', handler);
           }
         });
       }, 0);
     }
+  }
+
+  // ── GitHub 자동 배포 ──
+  const DEPLOY_DEFAULTS = { repo: 'dookie777/TERS-survey-builder', branch: 'main', base: 'https://ters-survey-builder.vercel.app', token: '' };
+  function getDeployCfg() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('deployCfg') || '{}'); } catch (e) {}
+    return Object.assign({}, DEPLOY_DEFAULTS, saved);
+  }
+  function suggestDeployFileName(title, surveyId) {
+    const slug = (title || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    return (slug || 'survey') + '-' + surveyId + '.html';
+  }
+  function cleanDeployFileName(v) {
+    let s = (v || '').trim().replace(/\.html?$/i, '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    return (s || 'survey') + '.html';
+  }
+  function currentDeployUrl() {
+    const cfg = getDeployCfg();
+    return cfg.base.replace(/\/+$/, '') + '/' + cleanDeployFileName(document.getElementById('deployFileName').value);
+  }
+  function syncDeployFileName() {
+    document.getElementById('deployUrlText').textContent = currentDeployUrl();
+  }
+  function setDeployStatus(msg, cls) {
+    const st = document.getElementById('deployStatus');
+    st.textContent = msg; st.className = 'deploy-popup-status' + (cls ? ' ' + cls : '');
+  }
+  function utf8ToBase64(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  async function ghRequest(cfg, method, path, body) {
+    const url = 'https://api.github.com/repos/' + cfg.repo + '/contents/' + path.split('/').map(encodeURIComponent).join('/');
+    const res = await fetch(url + (method === 'GET' ? ('?ref=' + encodeURIComponent(cfg.branch) + '&t=' + Date.now()) : ''), {
+      method,
+      headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    let json = null; try { json = await res.json(); } catch (e) {}
+    return { status: res.status, ok: res.ok, json };
+  }
+  function ghErrorText(r) {
+    if (r.status === 401) return '토큰이 유효하지 않습니다. ⚙ 설정에서 토큰을 확인하십시오';
+    if (r.status === 403) return '권한이 없습니다. 토큰의 Contents 권한이 Read and write 인지, 저장소가 선택됐는지 확인하십시오';
+    if (r.status === 404) return '저장소를 찾을 수 없습니다. 설정의 owner/repo 와 토큰의 저장소 범위를 확인하십시오';
+    if (r.status === 409) return '충돌이 발생했습니다. 다시 시도하십시오';
+    return 'GitHub 오류 (' + r.status + ') ' + ((r.json && r.json.message) || '');
+  }
+  async function deployToGithub() {
+    const cfg = getDeployCfg();
+    if (!cfg.token) { setDeployStatus('⚙ 설정에서 GitHub 토큰을 먼저 등록하십시오', 'err'); openDeploySettings(); return; }
+    const btn = document.getElementById('btnDeployGh');
+    const fileName = cleanDeployFileName(document.getElementById('deployFileName').value);
+    document.getElementById('deployFileName').value = fileName;
+    const url = currentDeployUrl();
+    btn.disabled = true;
+    try {
+      setDeployStatus('배포 파일 생성 중…');
+      const stamp = 'ters-deploy-' + Date.now().toString(36);
+      const html = generateDeployHtml(window._currentDeployData || {}) + '\n<!-- ' + stamp + ' -->\n';
+      setDeployStatus('GitHub 업로드 중…');
+      let sha = null;
+      const head = await ghRequest(cfg, 'GET', fileName);
+      if (head.ok && head.json && head.json.sha) sha = head.json.sha;
+      else if (head.status !== 404) throw new Error(ghErrorText(head));
+      const title = (window._currentDeployData || {}).title || '설문';
+      const put = await ghRequest(cfg, 'PUT', fileName, {
+        message: (sha ? 'Update survey: ' : 'Deploy survey: ') + title + ' (' + fileName + ')',
+        content: utf8ToBase64(html), branch: cfg.branch, ...(sha ? { sha } : {})
+      });
+      if (!put.ok) throw new Error(ghErrorText(put));
+      // 설문 데이터에 링크 저장
+      window._surveyDeployFile = fileName;
+      window._surveyDeployUrl = url;
+      window._surveyDeployedAt = new Date().toISOString();
+      saveSurvey();
+      setDeployStatus('업로드 완료 · Vercel 반영 확인 중… (보통 30초~1분)');
+      const live = await waitForDeploy(url, stamp);
+      if (live === true) setDeployStatus('배포 완료 · 링크가 열립니다', 'ok');
+      else if (live === 'skip') setDeployStatus('업로드 완료 · 약 1분 후 링크가 열립니다 (Vercel 주소에서 빌더를 열면 자동 확인됩니다)', 'ok');
+      else setDeployStatus('업로드는 완료됐지만 3분 내 반영이 확인되지 않았습니다. 잠시 후 링크를 직접 확인하십시오', 'err');
+    } catch (err) {
+      setDeployStatus(err.message || String(err), 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  async function waitForDeploy(url, stamp) {
+    let sameOrigin = false;
+    try { sameOrigin = new URL(url).origin === window.location.origin; } catch (e) {}
+    if (!sameOrigin) return 'skip';
+    const started = Date.now();
+    // 이번 업로드에 심은 스탬프가 실제 서빙되는 파일에 나타날 때까지 대기 (갱신 배포 시 이전 파일과 구분)
+    while (Date.now() - started < 180000) {
+      await new Promise(r => setTimeout(r, 5000));
+      try {
+        const res = await fetch(url + '?v=' + Date.now(), { cache: 'no-store' });
+        if (res.ok && (await res.text()).indexOf(stamp) >= 0) return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+  function copyDeployLink() {
+    const url = window._surveyDeployUrl || currentDeployUrl();
+    navigator.clipboard.writeText(url).then(() => {
+      const copied = document.getElementById('deployCopied');
+      copied.textContent = '링크가 복사되었습니다'; copied.classList.add('show');
+      setTimeout(() => copied.classList.remove('show'), 2000);
+    });
+  }
+  function openDeployLink() {
+    window.open(window._surveyDeployUrl || currentDeployUrl(), '_blank');
+  }
+  function openDeploySettings() {
+    const cfg = getDeployCfg();
+    document.getElementById('dsRepo').value = cfg.repo;
+    document.getElementById('dsBranch').value = cfg.branch;
+    document.getElementById('dsBase').value = cfg.base;
+    document.getElementById('dsToken').value = '';
+    document.getElementById('dsTokenState').textContent = cfg.token ? '저장된 토큰 있음 (…' + cfg.token.slice(-6) + ')' : '저장된 토큰 없음';
+    document.getElementById('dsStatus').textContent = '';
+    document.getElementById('deploySettings').classList.add('open');
+  }
+  function closeDeploySettings() { document.getElementById('deploySettings').classList.remove('open'); }
+  function readDeploySettingsForm() {
+    const cur = getDeployCfg();
+    const tok = document.getElementById('dsToken').value.trim();
+    return {
+      repo: document.getElementById('dsRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '') || DEPLOY_DEFAULTS.repo,
+      branch: document.getElementById('dsBranch').value.trim() || 'main',
+      base: document.getElementById('dsBase').value.trim().replace(/\/+$/, '') || DEPLOY_DEFAULTS.base,
+      token: tok || cur.token
+    };
+  }
+  function saveDeploySettings() {
+    const cfg = readDeploySettingsForm();
+    localStorage.setItem('deployCfg', JSON.stringify(cfg));
+    document.getElementById('dsTokenState').textContent = cfg.token ? '저장된 토큰 있음 (…' + cfg.token.slice(-6) + ')' : '저장된 토큰 없음';
+    document.getElementById('dsToken').value = '';
+    const st = document.getElementById('dsStatus'); st.textContent = '저장되었습니다'; st.className = 'deploy-popup-status ok';
+    if (document.getElementById('deployPopup').classList.contains('open')) syncDeployFileName();
+  }
+  async function testDeploySettings() {
+    const cfg = readDeploySettingsForm();
+    const st = document.getElementById('dsStatus');
+    if (!cfg.token) { st.textContent = '토큰을 입력하십시오'; st.className = 'deploy-popup-status err'; return; }
+    st.textContent = '확인 중…'; st.className = 'deploy-popup-status';
+    try {
+      const res = await fetch('https://api.github.com/repos/' + cfg.repo, { headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const canPush = j.permissions && j.permissions.push;
+        st.textContent = canPush ? ('연결 성공 · ' + j.full_name + ' 쓰기 권한 확인') : ('저장소는 보이지만 쓰기 권한이 없습니다. 토큰의 Contents 권한을 Read and write 로 설정하십시오');
+        st.className = 'deploy-popup-status ' + (canPush ? 'ok' : 'err');
+      } else { st.textContent = ghErrorText({ status: res.status, json: j }); st.className = 'deploy-popup-status err'; }
+    } catch (e) { st.textContent = '연결 실패: ' + e.message; st.className = 'deploy-popup-status err'; }
   }
 
   function generateDeployUrl() {

@@ -191,6 +191,13 @@
   .card-btn.danger:hover { border-color: rgba(235,87,87,0.7); background: rgba(235,87,87,0.08); }
   .card-btn.primary { background: rgba(255,255,255,0.06); border-color: var(--border-accent); color: var(--text-primary); }
 
+  /* 배포 링크 */
+  .card-link { display: flex; align-items: center; gap: 6px; margin-top: 2px; padding: 6px 8px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .card-link a { flex: 1; min-width: 0; font-size: 0.72rem; color: var(--text-secondary); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card-link a:hover { color: var(--text-primary); text-decoration: underline; }
+  .card-link button { flex: none; height: 24px; padding: 0 8px; font-size: 0.68rem; border: 1px solid var(--border); background: transparent; color: var(--text-secondary); border-radius: var(--radius-sm); cursor: pointer; font-family: var(--font-body); }
+  .card-link button:hover { border-color: var(--border-accent); color: var(--text-primary); }
+  .card-link.none { color: var(--text-muted); font-size: 0.7rem; }
   /* 응답 수 로딩 */
   .response-loading { font-size: 0.75rem; color: var(--text-muted); }
 
@@ -278,6 +285,14 @@ function formatDate(iso) {
 
 function newSurvey() {
   window.location.href = 'survey-builder-v1.html';
+}
+
+function copyDeployLink(id, btn) {
+  const s = getSurveys()[id];
+  if (!s || !s.deployUrl) return;
+  navigator.clipboard.writeText(s.deployUrl).then(() => {
+    const orig = btn.textContent; btn.textContent = '복사됨'; setTimeout(() => { btn.textContent = orig; }, 1500);
+  });
 }
 
 function editSurvey(id) {
@@ -385,6 +400,9 @@ async function renderList() {
             </span>
           </div>
         </div>
+        ${s.deployUrl
+          ? `<div class="card-link" onclick="event.stopPropagation()"><a href="${escHtml(s.deployUrl)}" target="_blank" rel="noopener" title="${escHtml(s.deployUrl)}">${escHtml(s.deployUrl.replace(/^https?:\/\//, ''))}</a><button onclick="copyDeployLink('${id}', this)">복사</button></div>`
+          : `<div class="card-link none">배포 링크 없음 · 빌더에서 배포하기</div>`}
         <div class="card-footer">
           <button class="card-btn primary" onclick="event.stopPropagation();editSurvey('${id}')">편집</button>
           <button class="card-btn" onclick="openCloseModal('${id}', event)">${isActive ? '종료' : '재개'}</button>
