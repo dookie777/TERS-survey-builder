@@ -4631,6 +4631,20 @@
       if (_backupPending) _backupTimer = setTimeout(runBackup, 500);
     }
   }
+  // 배포 전 Apps Script 익명 접근 점검: 권한이 '모든 사용자'가 아니면 응답이 서버에 기록되지 않음
+  async function checkAppsScriptAccess() {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 10000);
+    try {
+      const res = await fetch(APPS_SCRIPT_URL + '?action=counts&t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' });
+      const text = await res.text();
+      let json = null; try { json = JSON.parse(text); } catch (e) {}
+      if (json && json.status === 'ok') return { ok: true };
+      return { ok: false, msg: '배포 중단: 응답 수집 서버가 익명 접근을 거부합니다. Apps Script → 배포 → 배포 관리 → 편집 → 액세스 권한 "모든 사용자" → 새 버전 배포 후 다시 시도하십시오' };
+    } catch (e) {
+      if (e.name === 'AbortError') return { ok: false, msg: '배포 중단: 응답 수집 서버 응답 없음(10초 초과). 네트워크 또는 Apps Script 상태를 확인하십시오' };
+      return { ok: false, msg: '배포 중단: 응답 수집 서버에 연결할 수 없습니다 (' + e.message + '). Apps Script 배포의 액세스 권한이 "모든 사용자"인지 확인하십시오' };
+    } finally { clearTimeout(t); }
+  }
   async function deployToGithub() {
     const cfg = getDeployCfg();
     if (!cfg.token) { setDeployStatus('⚙ 설정에서 GitHub 토큰을 먼저 등록하십시오', 'err'); openDeploySettings(); return; }
@@ -4640,6 +4654,9 @@
     const url = currentDeployUrl();
     btn.disabled = true;
     try {
+      setDeployStatus('응답 수집 서버(Apps Script) 점검 중…');
+      const chk = await checkAppsScriptAccess();
+      if (!chk.ok) throw new Error(chk.msg);
       setDeployStatus('배포 파일 생성 중…');
       const stamp = 'ters-deploy-' + Date.now().toString(36);
       const html = generateDeployHtml(window._currentDeployData || {}) + '\n<!-- ' + stamp + ' -->\n';
