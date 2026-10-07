@@ -1945,7 +1945,7 @@
   <div class="deploy-settings-overlay" id="deploySettings" onclick="if(event.target===this)closeDeploySettings()">
     <div class="deploy-settings-box">
       <div class="ds-title">배포 설정</div>
-      <div class="ds-desc">배포하기 버튼이 GitHub 저장소에 설문 HTML을 올리고, Vercel이 자동 배포한 링크를 만듭니다. 토큰은 이 브라우저에만 저장됩니다.</div>
+      <div class="ds-desc">배포하기 버튼이 GitHub 저장소에 설문 HTML을 올리고, Vercel이 자동 배포한 링크를 만듭니다. 같은 토큰으로 <b>저장</b> 시 설문 정의가 GitHub <code>surveys/</code> 폴더에 자동 백업되며, 브라우저 데이터가 지워져도 목록 페이지가 백업에서 자동 복원합니다. 토큰은 이 브라우저에만 저장됩니다.</div>
       <div class="ds-label">GitHub 저장소 (owner/repo)</div>
       <input id="dsRepo" class="field-input" spellcheck="false">
       <div class="ds-label">브랜치</div>
@@ -4466,13 +4466,17 @@
       deployedAt: window._surveyDeployedAt || surveys[id]?.deployedAt || null
     };
     localStorage.setItem('surveys', JSON.stringify(surveys));
-    // 저장 완료 피드백
+    // 저장 완료 피드백 + GitHub 백업
+    setSaveBtnText('저장됨 ✓', 1500);
+    backupSurveyToGithub(surveys[id]);
+  }
+  function setSaveBtnText(text, ms) {
     const btn = document.querySelector('[onclick="saveSurvey()"]');
-    if (btn) {
-      const orig = btn.textContent;
-      btn.textContent = '저장됨 ✓';
-      setTimeout(() => { btn.textContent = orig; }, 1500);
-    }
+    if (!btn) return;
+    if (!btn.dataset.orig) btn.dataset.orig = btn.textContent;
+    btn.textContent = text;
+    clearTimeout(btn._t);
+    if (ms) btn._t = setTimeout(() => { btn.textContent = btn.dataset.orig; }, ms);
   }
 
   function loadSurveyFromStorage() {
@@ -4494,8 +4498,13 @@
     renderAll();
   }
 
-  function goToList() {
+  async function goToList() {
     saveSurvey();
+    // 이동 전에 대기 중인 GitHub 백업을 먼저 완료 (최대 6초)
+    if (_backupPending) {
+      clearTimeout(_backupTimer);
+      await Promise.race([runBackup(), new Promise(r => setTimeout(r, 6000))]);
+    }
     window.location.href = 'survey-list.html';
   }
 
@@ -4575,6 +4584,52 @@
     if (r.status === 404) return '저장소를 찾을 수 없습니다. 설정의 owner/repo 와 토큰의 저장소 범위를 확인하십시오';
     if (r.status === 409) return '충돌이 발생했습니다. 다시 시도하십시오';
     return 'GitHub 오류 (' + r.status + ') ' + ((r.json && r.json.message) || '');
+  }
+  // ── GitHub 백업: 저장 시 설문 정의(JSON)를 surveys/<id>.json 으로 보존 ──
+  let _backupTimer = null, _backupPending = null, _backupBusy = false;
+  async function gitBlobSha(str) {
+    const bytes = new TextEncoder().encode(str);
+    const head = new TextEncoder().encode('blob ' + bytes.length + '\0');
+    const buf = new Uint8Array(head.length + bytes.length); buf.set(head); buf.set(bytes, head.length);
+    const dig = await crypto.subtle.digest('SHA-1', buf);
+    return Array.from(new Uint8Array(dig)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  function backupSurveyToGithub(survey) {
+    const cfg = getDeployCfg();
+    if (!cfg.token) { setSaveBtnText('저장됨 ✓ (백업 미설정)', 3000); return; }
+    _backupPending = survey;
+    clearTimeout(_backupTimer);
+    _backupTimer = setTimeout(runBackup, 800);
+  }
+  async function runBackup() {
+    if (_backupBusy) { _backupTimer = setTimeout(runBackup, 1000); return; }
+    const survey = _backupPending; _backupPending = null;
+    if (!survey) return;
+    _backupBusy = true;
+    const cfg = getDeployCfg();
+    const path = 'surveys/' + survey.id + '.json';
+    try {
+      setSaveBtnText('백업 중…');
+      const content = JSON.stringify(survey);
+      const head = await ghRequest(cfg, 'GET', path);
+      let sha = null;
+      if (head.ok && head.json && head.json.sha) {
+        sha = head.json.sha;
+        if (sha === await gitBlobSha(content)) { setSaveBtnText('저장·백업 완료 ✓', 2000); return; }
+      } else if (head.status !== 404) throw new Error(ghErrorText(head));
+      const put = await ghRequest(cfg, 'PUT', path, {
+        message: (sha ? 'Backup survey: ' : 'Backup new survey: ') + (survey.title || survey.id),
+        content: utf8ToBase64(content), branch: cfg.branch, ...(sha ? { sha } : {})
+      });
+      if (!put.ok) throw new Error(ghErrorText(put));
+      setSaveBtnText('저장·백업 완료 ✓', 2000);
+    } catch (e) {
+      console.error('backup failed', e);
+      setSaveBtnText('저장됨 · 백업 실패', 4000);
+    } finally {
+      _backupBusy = false;
+      if (_backupPending) _backupTimer = setTimeout(runBackup, 500);
+    }
   }
   async function deployToGithub() {
     const cfg = getDeployCfg();

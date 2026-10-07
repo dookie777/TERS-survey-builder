@@ -264,6 +264,7 @@
     <div>
       <span class="content-title">내 설문</span>
       <span class="content-count" id="surveyCount"></span>
+      <span class="content-count" id="syncNote" style="display:none;"></span>
     </div>
   </div>
   <div id="surveyGrid" class="survey-grid"></div>
@@ -338,8 +339,10 @@ function openCloseModal(id, e) {
     // 재개
     s.status = 'active';
     s.closedAt = null;
+    s.updatedAt = new Date().toISOString();
     saveSurveys(surveys);
     renderList();
+    backupSurvey(s);
     return;
   }
   pendingCloseId = id;
@@ -357,7 +360,9 @@ function confirmClose() {
   if (surveys[pendingCloseId]) {
     surveys[pendingCloseId].status = 'closed';
     surveys[pendingCloseId].closedAt = new Date().toISOString();
+    surveys[pendingCloseId].updatedAt = new Date().toISOString();
     saveSurveys(surveys);
+    backupSurvey(surveys[pendingCloseId]);
   }
   closeConfirmModal();
   renderList();
@@ -370,6 +375,7 @@ function deleteSurvey(id, e) {
   delete surveys[id];
   saveSurveys(surveys);
   renderList();
+  deleteBackup(id);
 }
 
 async function fetchResponseCounts() {
@@ -550,9 +556,91 @@ function runRestore() {
     });
   });
   saveSurveys(surveys);
+  const del = getBackupDeleted(); const restoredIds = new Set(checked.map(r => Object.values(surveys).find(s => s.deployFile === r.name)).filter(Boolean).map(s => s.id));
+  if (del.some(d => restoredIds.has(d))) setBackupDeleted(del.filter(d => !restoredIds.has(d)));
+  restoredIds.forEach(id => backupSurvey(surveys[id]));
   st.textContent = `복구 완료 · 새로 추가 ${added}개, 갱신 ${replaced}개`;
   renderList();
   setTimeout(closeRestoreModal, 900);
+}
+
+// ── GitHub 백업 동기화: surveys/<id>.json ──
+const BACKUP_DEFAULTS = { repo: RESTORE_REPO, branch: 'main', token: '' };
+function backupCfg() {
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem('deployCfg') || '{}'); } catch (e) {}
+  return Object.assign({}, BACKUP_DEFAULTS, saved);
+}
+async function ghReq(cfg, method, path, body) {
+  const url = 'https://api.github.com/repos/' + cfg.repo + '/contents/' + path.split('/').map(encodeURIComponent).join('/');
+  const headers = { 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  if (cfg.token) headers['Authorization'] = 'Bearer ' + cfg.token;
+  if (body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(url + (method === 'GET' ? ('?ref=' + encodeURIComponent(cfg.branch) + '&t=' + Date.now()) : ''), { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let json = null; try { json = await res.json(); } catch (e) {}
+  return { status: res.status, ok: res.ok, json };
+}
+function utf8ToBase64(str) {
+  const bytes = new TextEncoder().encode(str); let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function getBackupDeleted() { try { return JSON.parse(localStorage.getItem('backupDeleted') || '[]'); } catch (e) { return []; } }
+function setBackupDeleted(list) { localStorage.setItem('backupDeleted', JSON.stringify(list)); }
+async function backupSurvey(survey) {
+  const cfg = backupCfg();
+  if (!cfg.token || !survey || !survey.id) return false;
+  const path = 'surveys/' + survey.id + '.json';
+  try {
+    const head = await ghReq(cfg, 'GET', path);
+    let sha = null;
+    if (head.ok && head.json && head.json.sha) sha = head.json.sha; else if (head.status !== 404) throw new Error('GET ' + head.status);
+    const put = await ghReq(cfg, 'PUT', path, { message: 'Backup survey: ' + (survey.title || survey.id), content: utf8ToBase64(JSON.stringify(survey)), branch: cfg.branch, ...(sha ? { sha } : {}) });
+    if (!put.ok) throw new Error('PUT ' + put.status);
+    return true;
+  } catch (e) { console.error('backup failed', e); return false; }
+}
+async function deleteBackup(id) {
+  const del = getBackupDeleted(); if (!del.includes(id)) { del.push(id); setBackupDeleted(del); }
+  const cfg = backupCfg(); if (!cfg.token) return false;
+  const path = 'surveys/' + id + '.json';
+  try {
+    const head = await ghReq(cfg, 'GET', path);
+    if (head.status === 404) return true;
+    if (!head.ok) throw new Error('GET ' + head.status);
+    const r = await ghReq(cfg, 'DELETE', path, { message: 'Delete survey backup: ' + id, sha: head.json.sha, branch: cfg.branch });
+    if (!r.ok) throw new Error('DELETE ' + r.status);
+    return true;
+  } catch (e) { console.error('backup delete failed', e); return false; }
+}
+function setSyncNote(text) {
+  const el = document.getElementById('syncNote'); if (!el) return;
+  el.textContent = text || ''; el.style.display = text ? '' : 'none';
+}
+async function syncFromBackup() {
+  const cfg = backupCfg();
+  try {
+    const res = await ghReq(cfg, 'GET', 'surveys');
+    if (res.status === 404) return;
+    if (!res.ok || !Array.isArray(res.json)) throw new Error('list ' + res.status);
+    const files = res.json.filter(f => f.type === 'file' && /\.json$/i.test(f.name));
+    if (!files.length) return;
+    const deleted = new Set(getBackupDeleted());
+    const surveys = getSurveys();
+    let added = 0, updated = 0;
+    const results = await Promise.all(files.map(async f => {
+      try { const r = await fetch(f.download_url + (f.download_url.includes('?') ? '&' : '?') + 't=' + Date.now()); if (!r.ok) return null; return await r.json(); } catch (e) { return null; }
+    }));
+    results.forEach(b => {
+      if (!b || !b.id || !Array.isArray(b.questions) || deleted.has(b.id)) return;
+      const local = surveys[b.id];
+      if (!local) { surveys[b.id] = b; added++; }
+      else if (new Date(b.updatedAt || 0) > new Date(local.updatedAt || 0)) { surveys[b.id] = Object.assign({}, local, b); updated++; }
+    });
+    if (added || updated) {
+      saveSurveys(surveys); renderList();
+      setSyncNote('GitHub 백업에서 불러옴 · 추가 ' + added + '개, 갱신 ' + updated + '개');
+    }
+  } catch (e) { console.error('backup sync failed', e); }
 }
 
 function safeDecode(s) { try { return decodeURIComponent(s); } catch (e) { return s; } }
@@ -569,6 +657,7 @@ function duplicateSurvey(id, e) {
   const newId = 'survey_' + Date.now();
   const now = new Date().toISOString();
   surveys[newId] = Object.assign({}, JSON.parse(JSON.stringify(src)), {
+    id: newId,
     title: baseTitle + '의 사본' + n,
     createdAt: now,
     updatedAt: now,
@@ -577,6 +666,7 @@ function duplicateSurvey(id, e) {
   });
   saveSurveys(surveys);
   renderList();
+  backupSurvey(surveys[newId]);
 }
 
 function escHtml(str) {
@@ -593,8 +683,9 @@ function escHtml(str) {
   }
 })();
 
-// 초기 렌더
+// 초기 렌더 + GitHub 백업 동기화
 renderList();
+syncFromBackup();
 </script>
 <footer class="site-footer">© 2026 THE EROOM SPORTS. All rights reserved.</footer>
 </body>
