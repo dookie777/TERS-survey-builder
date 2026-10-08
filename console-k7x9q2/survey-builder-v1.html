@@ -4550,6 +4550,11 @@
     window.location.href = 'index.html';
   }
 
+  function coverHasContent() {
+    const c = cover || {};
+    const txt = s => (s || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+    return !!(c.logo || txt(c.title) || txt(c.subtitle) || (Array.isArray(c.blocks) && c.blocks.length));
+  }
   function deployOrShowLink(e) {
     if (e) e.stopPropagation();
     const title = document.getElementById('surveyTitle').value || '새 설문지';
@@ -4557,7 +4562,9 @@
       window._surveyDeployId = Date.now().toString(36);
     }
     const surveyId = window._surveyDeployId;
-    window._currentDeployData = { title, cover, coverActive, questions, surveyId, startGroupIndex: coverActive ? -1 : 0 };
+    // 배포본은 사이드바 선택 상태(coverActive)와 무관하게, 표지에 내용이 있으면 항상 표지부터 시작
+    const useCover = coverHasContent();
+    window._currentDeployData = { title, cover, coverActive: useCover, questions, surveyId, startGroupIndex: useCover ? -1 : 0 };
     const fnInput = document.getElementById('deployFileName');
     fnInput.value = window._surveyDeployFile || suggestDeployFileName(title, surveyId);
     syncDeployFileName();
@@ -4864,12 +4871,13 @@
     document.getElementById('previewPopup').classList.remove('open');
     const surveyTitle = document.getElementById('surveyTitle').value || '설문지';
     let startGroupIndex;
+    const useCover = coverHasContent();
     if (mode === 'start') {
-      startGroupIndex = -1;
+      startGroupIndex = useCover ? -1 : 0;
     } else {
       startGroupIndex = getSectionIndexOf(previewIndex);
     }
-    const data = { title: surveyTitle, cover, coverActive, questions, startGroupIndex };
+    const data = { title: surveyTitle, cover, coverActive: useCover, questions, startGroupIndex };
     const dataStr = JSON.stringify(data).replace(/`/g, '\\`');
     const currentTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
     const html = buildSurveyPageHtml(dataStr, surveyTitle, currentTheme, currentSelectColor);
