@@ -1836,8 +1836,50 @@
       margin-top: auto;
     }
   </style>
+<style>
+  /* ── 관리자 게이트 ── */
+  #adminGate { position: fixed; inset: 0; z-index: 99999; background: var(--bg-primary, #0d0d0d); display: flex; align-items: center; justify-content: center; font-family: var(--font-body, sans-serif); }
+  #adminGate .gate-box { width: 320px; padding: 28px; border: 1px solid var(--border, #2a2a2a); border-radius: 12px; background: var(--bg-card, #161616); }
+  #adminGate .gate-title { font-size: 0.95rem; font-weight: 700; color: var(--text-primary, #fff); margin-bottom: 14px; letter-spacing: 0.02em; }
+  #adminGate input { width: 100%; height: 40px; padding: 0 12px; border: 1px solid var(--border, #2a2a2a); border-radius: 8px; background: var(--bg-tertiary, #1f1f1f); color: var(--text-primary, #fff); font-size: 0.9rem; outline: none; box-sizing: border-box; }
+  #adminGate input:focus { border-color: var(--border-accent, #666); }
+  #adminGate button { width: 100%; height: 40px; margin-top: 10px; border: none; border-radius: 8px; background: var(--text-primary, #fff); color: var(--bg-primary, #000); font-weight: 700; cursor: pointer; font-size: 0.9rem; }
+  #adminGate .gate-err { min-height: 18px; margin-top: 8px; font-size: 0.75rem; color: #eb5757; }
+  body.gate-locked > :not(#adminGate) { visibility: hidden; }
+</style>
 </head>
 <body>
+<div id="adminGate" style="display:none;">
+  <div class="gate-box">
+    <div class="gate-title">SURVEY BUILDER · 관리자 확인</div>
+    <input id="gatePw" type="password" placeholder="비밀번호" autocomplete="current-password">
+    <button onclick="gateSubmit()">확인</button>
+    <div class="gate-err" id="gateErr"></div>
+  </div>
+</div>
+<script>
+(function(){
+  const ADMIN_HASH = 'f60e07fc2e9aeaec05f061f6fff3a56caa006221484f7c032ee229d8d669ae05';
+  const KEY = 'adminAuth';
+  async function sha256(s){ const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join(''); }
+  function authed(){ try { return localStorage.getItem(KEY) === ADMIN_HASH; } catch(e){ return false; } }
+  window.gateLocked = !authed();
+  window.gateSubmit = async function(){
+    const v = document.getElementById('gatePw').value;
+    const h = await sha256(v);
+    if (h === ADMIN_HASH) { try { localStorage.setItem(KEY, h); } catch(e){} window.gateLocked = false; document.body.classList.remove('gate-locked'); document.getElementById('adminGate').style.display = 'none'; document.dispatchEvent(new Event('gate-unlocked')); }
+    else { document.getElementById('gateErr').textContent = '비밀번호가 올바르지 않습니다'; document.getElementById('gatePw').select(); }
+  };
+  document.addEventListener('DOMContentLoaded', function(){
+    if (!window.gateLocked) return;
+    document.body.classList.add('gate-locked');
+    const g = document.getElementById('adminGate'); g.style.display = 'flex';
+    const inp = document.getElementById('gatePw'); inp.focus();
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.stopPropagation(); gateSubmit(); } });
+  });
+})();
+</script>
+
 
   <!-- Header -->
   <header class="header">
@@ -4505,7 +4547,7 @@
       clearTimeout(_backupTimer);
       await Promise.race([runBackup(), new Promise(r => setTimeout(r, 6000))]);
     }
-    window.location.href = 'survey-list.html';
+    window.location.href = 'index.html';
   }
 
   function deployOrShowLink(e) {
