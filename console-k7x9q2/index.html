@@ -188,6 +188,8 @@
     display: flex; align-items: center; justify-content: center;
   }
   .card-btn:hover { border-color: var(--border-accent); color: var(--text-primary); background: rgba(255,255,255,0.04); }
+  .card-btn.sheet:disabled { opacity: 0.4; cursor: not-allowed; }
+  .card-btn.sheet:disabled:hover { border-color: var(--border); color: var(--text-secondary); background: transparent; }
   .card-btn.danger { border-color: rgba(235,87,87,0.3); color: #eb5757; }
   .card-btn.danger:hover { border-color: rgba(235,87,87,0.7); background: rgba(235,87,87,0.08); }
   .card-btn.primary { background: rgba(255,255,255,0.06); border-color: var(--border-accent); color: var(--text-primary); }
@@ -338,7 +340,7 @@
 </div>
 
 <script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwkDHq31Q5ibih5fJhE_Q9vwd_zcoz25TJ34NyPpowphvlci3jlXsTR4RsjQXczpjWCtg/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzVD6BNY93sqTt_lb096KmcZ7_WZyfu6BPlhg6Gx1o0oNG3-G_NO1dRAt93RYaCZSumdQ/exec';
 
 let pendingCloseId = null;
 
@@ -420,13 +422,29 @@ function deleteSurvey(id, e) {
   deleteBackup(id);
 }
 
+let sheetInfo = { spreadsheetId: null, gids: {} };
 async function fetchResponseCounts() {
   try {
-    const res = await fetch(APPS_SCRIPT_URL + '?action=counts', { mode: 'cors' });
+    const res = await fetch(APPS_SCRIPT_URL + '?action=counts&t=' + Date.now(), { mode: 'cors' });
     const data = await res.json();
-    if (data.status === 'ok') return data.counts;
+    if (data.status === 'ok') {
+      sheetInfo = { spreadsheetId: data.spreadsheetId || null, gids: data.gids || {} };
+      return data.counts;
+    }
   } catch {}
   return {};
+}
+function sheetUrlFor(title) {
+  if (!sheetInfo.spreadsheetId) return null;
+  const gid = sheetInfo.gids[title];
+  if (gid == null) return null;
+  return 'https://docs.google.com/spreadsheets/d/' + sheetInfo.spreadsheetId + '/edit#gid=' + gid;
+}
+function openSheet(id, e) {
+  e.stopPropagation();
+  const s = getSurveys()[id]; if (!s) return;
+  const url = sheetUrlFor(s.title || '새 설문지');
+  if (url) window.open(url, '_blank', 'noopener');
 }
 
 async function renderList() {
@@ -483,6 +501,7 @@ async function renderList() {
           : `<div class="card-link none">배포 링크 없음 · 빌더에서 배포하기</div>`}
         <div class="card-footer">
           <button class="card-btn primary" onclick="event.stopPropagation();editSurvey('${id}')">편집</button>
+          <button class="card-btn sheet" id="sheet_${id}" onclick="openSheet('${id}', event)" disabled title="응답 시트 확인 중">결과</button>
           <button class="card-btn" onclick="openCloseModal('${id}', event)">${isActive ? '종료' : '재개'}</button>
           <button class="card-btn" onclick="duplicateSurvey('${id}', event)">복제</button>
           <button class="card-btn danger" onclick="deleteSurvey('${id}', event)">삭제</button>
@@ -499,6 +518,12 @@ async function renderList() {
     const title = s.title || '새 설문지';
     const count = counts[title] ?? '-';
     el.textContent = count === '-' ? '-' : `${count}명`;
+    const sb = document.getElementById(`sheet_${id}`);
+    if (sb) {
+      const url = sheetUrlFor(title);
+      if (url) { sb.disabled = false; sb.title = '응답 결과 시트 열기 (' + title + ' 탭)'; }
+      else { sb.disabled = true; sb.title = sheetInfo.spreadsheetId ? '아직 응답이 없어 시트 탭이 생성되지 않았습니다' : '시트 정보를 불러오지 못했습니다 (Apps Script 재배포 필요)'; }
+    }
   });
 }
 
