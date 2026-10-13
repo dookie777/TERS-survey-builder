@@ -5297,6 +5297,18 @@ function toggleDeployTheme() {
 // -1 = 표지, 0~ = 섹션 그룹 인덱스
 let groupIndex = -1;
 const answers = {};
+const shuffleOrder = {};
+function optList(qi, q) {
+  let order = q.options.map((_, i) => i);
+  if (q.shuffle) {
+    if (!shuffleOrder[qi] || shuffleOrder[qi].length !== order.length) {
+      for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+      shuffleOrder[qi] = order;
+    }
+    order = shuffleOrder[qi];
+  }
+  return order.map((idx, pos) => ({ idx, pos, text: q.options[idx] }));
+}
 const etcTexts = {};
 const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -5345,12 +5357,12 @@ function buildInputHtml(q, qi, isCentered) {
       oninput="answers[\${qi}]=this.value">\${escHtml(saved)}</textarea>\`;
   }
   if (q.type === '객관식') {
-    const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
+    const opts = optList(qi, q);
     const saved = answers[qi];
     const saN = opts.length;
-    return \`<div class="options-wrap">\${opts.map((opt, optIdx) => \`
-      <div class="option-item\${saved===optIdx?' selected':''}" onclick="selectSingle(\${qi},\${optIdx},this)">
-        <span class="option-key">\${keys[optIdx]}</span><span>\${escHtml(opt)||'옵션 '+(optIdx+1)}</span>
+    return \`<div class="options-wrap">\${opts.map(o => \`
+      <div class="option-item\${saved===o.idx?' selected':''}" data-optidx="\${o.idx}" onclick="selectSingle(\${qi},\${o.idx},this)">
+        <span class="option-key">\${keys[o.pos]}</span><span>\${escHtml(o.text)||'옵션 '+(o.idx+1)}</span>
       </div>\`).join('')}\${q.hasEtc?\`
       <div class="option-item\${saved==='__etc__'?' selected':''}" data-special="etc" onclick="selectSingle(\${qi},'__etc__',this)">
         <span class="option-key">\${keys[saN]||'·'}</span><span>기타</span>
@@ -5365,16 +5377,16 @@ function buildInputHtml(q, qi, isCentered) {
   if (q.type === '체크박스') {
     const max = q.maxCheck || 0;
     const isPriority = q.priority || false;
-    const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
+    const opts = optList(qi, q);
     const saved = answers[qi] || [];
     const cbN = opts.length;
     return \`\${max>0?\`<div class="max-hint">\${isPriority?'우선순위':'최대'} \${max}개 선택 가능</div>\`:''}
-      <div class="options-wrap">\${opts.map((opt, optIdx) => {
-        const rankIdx = saved.indexOf(optIdx);
+      <div class="options-wrap">\${opts.map(o => {
+        const rankIdx = saved.indexOf(o.idx);
         const isSelected = rankIdx >= 0;
-        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : keys[optIdx];
-        return \`<div class="option-item\${isSelected?' selected':''}" data-optidx="\${optIdx}" data-key="\${keys[optIdx]}" onclick="selectMulti(\${qi},\${optIdx},this,\${max},\${isPriority})">
-          <span class="option-key">\${rankLabel}</span><span>\${escHtml(opt)||'옵션 '+(optIdx+1)}</span>
+        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : keys[o.pos];
+        return \`<div class="option-item\${isSelected?' selected':''}" data-optidx="\${o.idx}" data-key="\${keys[o.pos]}" onclick="selectMulti(\${qi},\${o.idx},this,\${max},\${isPriority})">
+          <span class="option-key">\${rankLabel}</span><span>\${escHtml(o.text)||'옵션 '+(o.idx+1)}</span>
         </div>\`;
       }).join('')}\${q.hasEtc?(()=>{
         const rankIdx = saved.indexOf('__etc__');

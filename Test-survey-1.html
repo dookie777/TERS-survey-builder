@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ko"  >
+<html lang="ko" data-theme="light" >
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -404,7 +404,20 @@ function toggleDeployTheme() {
 // -1 = 표지, 0~ = 섹션 그룹 인덱스
 let groupIndex = -1;
 const answers = {};
-const keys = 'ABCDEFGHIJ';
+const shuffleOrder = {};
+function optList(qi, q) {
+  let order = q.options.map((_, i) => i);
+  if (q.shuffle) {
+    if (!shuffleOrder[qi] || shuffleOrder[qi].length !== order.length) {
+      for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+      shuffleOrder[qi] = order;
+    }
+    order = shuffleOrder[qi];
+  }
+  return order.map((idx, pos) => ({ idx, pos, text: q.options[idx] }));
+}
+const etcTexts = {};
+const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 function escHtml(str) {
   if (!str) return '';
@@ -451,27 +464,61 @@ function buildInputHtml(q, qi, isCentered) {
       oninput="answers[${qi}]=this.value">${escHtml(saved)}</textarea>`;
   }
   if (q.type === '객관식') {
-    const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
+    const opts = optList(qi, q);
     const saved = answers[qi];
-    return `<div class="options-wrap">${opts.map((opt, i) => `
-      <div class="option-item${saved===i?' selected':''}" onclick="selectSingle(${qi},${i},this)">
-        <span class="option-key">${keys[i]}</span><span>${escHtml(opt)||'옵션 '+(i+1)}</span>
-      </div>`).join('')}</div>`;
+    const saN = opts.length;
+    return `<div class="options-wrap">${opts.map(o => `
+      <div class="option-item${saved===o.idx?' selected':''}" data-optidx="${o.idx}" onclick="selectSingle(${qi},${o.idx},this)">
+        <span class="option-key">${keys[o.pos]}</span><span>${escHtml(o.text)||'옵션 '+(o.idx+1)}</span>
+      </div>`).join('')}${q.hasEtc?`
+      <div class="option-item${saved==='__etc__'?' selected':''}" data-special="etc" onclick="selectSingle(${qi},'__etc__',this)">
+        <span class="option-key">${keys[saN]||'·'}</span><span>기타</span>
+      </div>
+      <div id="etcWrap_${qi}" style="display:${saved==='__etc__'?'block':'none'};margin-top:6px;">
+        <input class="ans-input" type="text" placeholder="기타 내용을 입력하십시오" value="${escHtml(etcTexts[qi]||'')}" oninput="etcTexts[${qi}]=this.value">
+      </div>`:''}${q.hasNone?`
+      <div class="option-item${saved==='__none__'?' selected':''}" data-special="none" onclick="selectSingle(${qi},'__none__',this)">
+        <span class="option-key">${keys[saN+(q.hasEtc?1:0)]||'·'}</span><span>없음</span>
+      </div>`:''}</div>`;
   }
   if (q.type === '체크박스') {
     const max = q.maxCheck || 0;
-    const opts = q.shuffle ? [...q.options].sort(() => Math.random()-0.5) : q.options;
+    const isPriority = q.priority || false;
+    const opts = optList(qi, q);
     const saved = answers[qi] || [];
-    return `${max>0?`<div class="max-hint">최대 ${max}개 선택 가능</div>`:''}
-      <div class="options-wrap">${opts.map((opt, i) => `
-        <div class="option-item${saved.includes(i)?' selected':''}" onclick="selectMulti(${qi},${i},this,${max})">
-          <span class="option-key">${keys[i]}</span><span>${escHtml(opt)||'옵션 '+(i+1)}</span>
-        </div>`).join('')}</div>`;
+    const cbN = opts.length;
+    return `${max>0?`<div class="max-hint">${isPriority?'우선순위':'최대'} ${max}개 선택 가능</div>`:''}
+      <div class="options-wrap">${opts.map(o => {
+        const rankIdx = saved.indexOf(o.idx);
+        const isSelected = rankIdx >= 0;
+        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : keys[o.pos];
+        return `<div class="option-item${isSelected?' selected':''}" data-optidx="${o.idx}" data-key="${keys[o.pos]}" onclick="selectMulti(${qi},${o.idx},this,${max},${isPriority})">
+          <span class="option-key">${rankLabel}</span><span>${escHtml(o.text)||'옵션 '+(o.idx+1)}</span>
+        </div>`;
+      }).join('')}${q.hasEtc?(()=>{
+        const rankIdx = saved.indexOf('__etc__');
+        const isSelected = rankIdx >= 0;
+        const eKey = keys[cbN]||'·';
+        const rankLabel = isPriority && isSelected ? (rankIdx+1)+'순위' : eKey;
+        return `<div class="option-item${isSelected?' selected':''}" data-optidx="__etc__" data-key="${eKey}" data-special="etc" onclick="selectMulti(${qi},'__etc__',this,${max},${isPriority})">
+          <span class="option-key">${rankLabel}</span><span>기타</span>
+        </div>
+        <div id="etcWrap_${qi}" style="display:${isSelected?'block':'none'};margin-top:6px;">
+          <input class="ans-input" type="text" placeholder="기타 내용을 입력하십시오" value="${escHtml(etcTexts[qi]||'')}" oninput="etcTexts[${qi}]=this.value">
+        </div>`;
+      })():''}${q.hasNone?(()=>{
+        const rankIdx = saved.indexOf('__none__');
+        const isSelected = rankIdx >= 0;
+        const nKey = keys[cbN+(q.hasEtc?1:0)]||'·';
+        return `<div class="option-item${isSelected?' selected':''}" data-optidx="__none__" data-key="${nKey}" data-special="none" onclick="selectMulti(${qi},'__none__',this,${max},${isPriority})">
+          <span class="option-key">${nKey}</span><span>없음</span>
+        </div>`;
+      })():''}</div>`;
   }
   if (q.type === '드롭다운') {
     const saved = answers[qi] ?? '';
     return `<select class="ans-select" onchange="answers[${qi}]=this.value; this.classList.toggle('answered', !!this.value);">
-      <option value="">선택하십시오</option>
+      <option value="" ${saved===''||saved==null?'selected':''}>선택하십시오</option>
       ${q.options.map((opt,i)=>`<option value="${i}"${saved==i?' selected':''}>${escHtml(opt)||'옵션 '+(i+1)}</option>`).join('')}
     </select>`;
   }
@@ -649,7 +696,9 @@ function renderPage() {
       </div>
     </div>`;
 
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  var sc = document.querySelector('.scroll-container');
+  if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
+  else window.scrollTo({ top: 0, behavior: 'smooth' });
   requestAnimationFrame(() => { requestAnimationFrame(() => {
     calcScaleWidth();
     calcMatrixWidth();
@@ -783,14 +832,46 @@ function selectSingle(qi, idx, el) {
   answers[qi] = idx;
   el.closest('.options-wrap').querySelectorAll('.option-item').forEach(o => o.classList.remove('selected'));
   el.classList.add('selected');
+  const etcWrap = document.getElementById('etcWrap_'+qi);
+  if (etcWrap) etcWrap.style.display = (idx === '__etc__') ? 'block' : 'none';
 }
 
-function selectMulti(qi, idx, el, max) {
+function selectMulti(qi, idx, el, max, isPriority) {
   if (!answers[qi]) answers[qi] = [];
   const arr = answers[qi];
+  const wrap = el.closest('.options-wrap');
   const pos = arr.indexOf(idx);
   if (pos >= 0) { arr.splice(pos, 1); el.classList.remove('selected'); }
-  else { if (max > 0 && arr.length >= max) return; arr.push(idx); el.classList.add('selected'); }
+  else {
+    if (idx === '__none__') {
+      // 없음 선택 시 다른 항목 전부 해제
+      arr.length = 0;
+      if (wrap) wrap.querySelectorAll('.option-item').forEach(o => o.classList.remove('selected'));
+      arr.push(idx); el.classList.add('selected');
+    } else {
+      // 다른 항목 선택 시 없음 해제
+      const nonePos = arr.indexOf('__none__');
+      if (nonePos >= 0) {
+        arr.splice(nonePos, 1);
+        const noneEl = wrap && wrap.querySelector('.option-item[data-special="none"]');
+        if (noneEl) noneEl.classList.remove('selected');
+      }
+      if (max > 0 && arr.length >= max) return;
+      arr.push(idx); el.classList.add('selected');
+    }
+  }
+  const etcWrap = document.getElementById('etcWrap_'+qi);
+  if (etcWrap) etcWrap.style.display = arr.indexOf('__etc__') >= 0 ? 'block' : 'none';
+  if (isPriority) {
+    if (wrap) wrap.querySelectorAll('.option-item').forEach(item => {
+      const oRaw = item.dataset.optidx;
+      const oIdx = isNaN(+oRaw) ? oRaw : +oRaw;
+      const rankIdx = arr.indexOf(oIdx);
+      const keyEl = item.querySelector('.option-key');
+      if (keyEl) keyEl.textContent = rankIdx >= 0 ? (rankIdx+1)+'순위' : item.dataset.key;
+      item.classList.toggle('selected', rankIdx >= 0);
+    });
+  }
 }
 
 function selectScale(qi, val, el) {
@@ -980,10 +1061,27 @@ function submitToGoogleSheets() {
   const answersPayload = {};
   realQuestions.forEach((q, i) => {
     const qi = questions.indexOf(q);
+    let ans = answers[qi] ?? null;
+    const optLabel = (idx) => {
+      if (idx === '__etc__') return '기타: ' + (etcTexts[qi] || '').trim();
+      if (idx === '__none__') return '없음';
+      return q.options[idx] != null ? q.options[idx] : idx;
+    };
+    if (q.type === '객관식' && ans != null && q.options) {
+      ans = (ans === '__etc__' || ans === '__none__') ? optLabel(ans) : (q.options[parseInt(ans)] || ans);
+    } else if (q.type === '체크박스' && Array.isArray(ans) && q.options) {
+      if (q.priority) {
+        ans = ans.map((idx, rank) => (rank+1)+'순위: '+optLabel(idx)).join(', ');
+      } else {
+        ans = ans.map(idx => optLabel(idx)).join(', ');
+      }
+    } else if (q.type === '드롭다운' && ans != null && q.options) {
+      ans = q.options[parseInt(ans)] || ans;
+    }
     answersPayload[qi] = {
       questionId: 'Q' + (i + 1),
       text: q.text ? q.text.replace(/<[^>]+>/g, '') : '(질문 없음)',
-      answer: answers[qi] ?? null
+      answer: ans
     };
   });
   fetch(RAW.appsScriptUrl, {
@@ -1117,3 +1215,4 @@ renderPage();
 </script>
 </body>
 </html>
+<!-- ters-deploy-mv65wq5d -->
