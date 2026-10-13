@@ -1013,7 +1013,7 @@ function nextPage() {
     if (logicResult === 'end') {
       window._earlyEnd = true;
       groupIndex = groups.length;
-      // 중도 종료(스크리닝·동의 거부 등): 그 시점까지의 응답을 별도 탭에 기록
+      // 중도 종료(스크리닝·동의 거부 등): 그 시점까지의 응답을 같은 탭에 기록 (이후 문항은 빈칸)
       if (RAW.appsScriptUrl && RAW.surveyId && !window._earlyEndSent) {
         window._earlyEndSent = true;
         submitToGoogleSheets({ partial: true });
@@ -1096,7 +1096,7 @@ function submitToGoogleSheets(opts) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       surveyId: RAW.surveyId,
-      surveyTitle: (RAW.title || '새 설문지') + (partial ? ' (중도종료)' : ''),
+      surveyTitle: RAW.title || '새 설문지',
       answers: answersPayload
     })
   }).catch(() => {}); // no-cors이므로 응답 확인 불가, 에러 무시
@@ -1221,4 +1221,4 @@ renderPage();
 </script>
 </body>
 </html>
-<!-- ters-deploy-mv66zn7a -->
+<!-- ters-deploy-mv6bgfba -->
