@@ -5983,16 +5983,34 @@ function submitToGoogleSheets(opts) {
       answer: ans
     };
   });
+  const sheetBody = JSON.stringify({
+    surveyId: RAW.surveyId,
+    surveyTitle: RAW.title || '새 설문지',
+    answers: answersPayload
+  });
   fetch(RAW.appsScriptUrl, {
     method: 'POST',
     mode: 'no-cors',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      surveyId: RAW.surveyId,
-      surveyTitle: RAW.title || '새 설문지',
-      answers: answersPayload
-    })
+    body: sheetBody
   }).catch(() => {}); // no-cors이므로 응답 확인 불가, 에러 무시
+  // 이중 저장: Apps Script가 막혀도 응답이 남도록 Vercel 저장소에도 별도 전송
+  try {
+    if (/^https?:$/.test(location.protocol) && location.pathname.indexOf('/console-') === -1) {
+      const backupBody = JSON.stringify({
+        surveyId: RAW.surveyId,
+        surveyTitle: RAW.title || '새 설문지',
+        partial: partial,
+        answers: answersPayload
+      });
+      const sendBackup = (n) => {
+        fetch('/api/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: backupBody })
+          .then(r => { if (!r.ok && n < 3) setTimeout(() => sendBackup(n + 1), 2000 * n); })
+          .catch(() => { if (n < 3) setTimeout(() => sendBackup(n + 1), 2000 * n); });
+      };
+      sendBackup(1);
+    }
+  } catch (e) {}
 }
 
 document.addEventListener('keydown', e => {
