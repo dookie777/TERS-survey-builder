@@ -276,7 +276,7 @@
   window.gateSubmit = async function(){
     const v = document.getElementById('gatePw').value;
     const h = await sha256(v);
-    if (h === ADMIN_HASH) { try { localStorage.setItem(KEY, h); } catch(e){} window.gateLocked = false; document.body.classList.remove('gate-locked'); document.getElementById('adminGate').style.display = 'none'; document.dispatchEvent(new Event('gate-unlocked')); }
+    if (h === ADMIN_HASH) { try { localStorage.setItem(KEY, h); localStorage.setItem('adminKey', v); } catch(e){} window.gateLocked = false; document.body.classList.remove('gate-locked'); document.getElementById('adminGate').style.display = 'none'; document.dispatchEvent(new Event('gate-unlocked')); }
     else { document.getElementById('gateErr').textContent = '비밀번호가 올바르지 않습니다'; document.getElementById('gatePw').select(); }
   };
   document.addEventListener('DOMContentLoaded', function(){
@@ -324,6 +324,21 @@
     <div class="modal-btns">
       <button class="modal-btn cancel" onclick="closeRestoreModal()">닫기</button>
       <button class="modal-btn confirm ok" id="restoreBtn" onclick="runRestore()">선택한 설문 복구</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="backupModal">
+  <div class="modal">
+    <div class="modal-title">백업 응답 (Vercel 저장소)</div>
+    <div class="modal-desc" id="backupDesc">구글 시트와 별도로 저장된 응답입니다. 시트 전송이 막혔던 기간의 응답도 여기에 남습니다.</div>
+    <div id="backupPwWrap" style="display:none;margin-bottom:14px;">
+      <input type="password" id="backupPw" placeholder="관리자 비밀번호" style="width:100%;padding:9px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:0.82rem;">
+    </div>
+    <div id="backupStatus" style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:16px;min-height:1.2em;"></div>
+    <div class="modal-btns">
+      <button class="modal-btn cancel" onclick="closeBackupModal()">닫기</button>
+      <button class="modal-btn confirm ok" id="backupBtn" onclick="backupAction()">불러오기</button>
     </div>
   </div>
 </div>
@@ -502,6 +517,7 @@ async function renderList() {
         <div class="card-footer">
           <button class="card-btn primary" onclick="event.stopPropagation();editSurvey('${id}')">편집</button>
           <button class="card-btn sheet" id="sheet_${id}" onclick="openSheet('${id}', event)" disabled title="응답 시트 확인 중">결과</button>
+          <button class="card-btn" onclick="openBackupModal('${id}', event)" title="Vercel 저장소에 이중 저장된 응답 내려받기">백업</button>
           <button class="card-btn" onclick="openCloseModal('${id}', event)">${isActive ? '종료' : '재개'}</button>
           <button class="card-btn" onclick="duplicateSurvey('${id}', event)">복제</button>
           <button class="card-btn danger" onclick="deleteSurvey('${id}', event)">삭제</button>
@@ -525,6 +541,70 @@ async function renderList() {
       else { sb.disabled = true; sb.title = sheetInfo.spreadsheetId ? '아직 응답이 없어 시트 탭이 생성되지 않았습니다' : '시트 정보를 불러오지 못했습니다 (Apps Script 재배포 필요)'; }
     }
   });
+}
+
+// ── 백업 응답 (Vercel Blob) ──
+let backupId = null, backupData = null;
+function backupKey() { try { return localStorage.getItem('adminKey') || ''; } catch (e) { return ''; } }
+function openBackupModal(id, e) {
+  if (e) e.stopPropagation();
+  backupId = id; backupData = null;
+  const s = getSurveys()[id];
+  document.getElementById('backupDesc').textContent = '「' + ((s && s.title) || '새 설문지') + '」 · 구글 시트와 별도로 저장된 응답입니다. 시트 전송이 막혔던 기간의 응답도 여기에 남습니다. (2026-10-15 08:28 이후 응답부터 저장)';
+  document.getElementById('backupStatus').textContent = '';
+  document.getElementById('backupModal').classList.add('open');
+  const has = !!backupKey();
+  document.getElementById('backupPwWrap').style.display = has ? 'none' : 'block';
+  const bb = document.getElementById('backupBtn'); bb.textContent = '불러오기'; bb.onclick = backupAction; bb.disabled = false;
+  const pwi = document.getElementById('backupPw'); pwi.onkeydown = ev => { if (ev.key === 'Enter') { ev.stopPropagation(); loadBackup(); } };
+  if (has) loadBackup(); else document.getElementById('backupPw').focus();
+}
+function closeBackupModal() { document.getElementById('backupModal').classList.remove('open'); backupId = null; backupData = null; }
+function backupAction() { if (backupData) downloadBackupCsv(); else loadBackup(); }
+async function loadBackup() {
+  const st = document.getElementById('backupStatus'), btn = document.getElementById('backupBtn');
+  let key = backupKey();
+  const pw = document.getElementById('backupPw');
+  if (!key && pw.value) key = pw.value;
+  if (!key) { st.textContent = '관리자 비밀번호를 입력해 주십시오'; return; }
+  st.textContent = '불러오는 중...'; btn.disabled = true;
+  try {
+    const res = await fetch('/api/responses?surveyId=' + encodeURIComponent(backupId), { headers: { 'x-admin-key': key }, cache: 'no-store' });
+    if (res.status === 401) { try { localStorage.removeItem('adminKey'); } catch (e) {} document.getElementById('backupPwWrap').style.display = 'block'; pw.value = ''; pw.focus(); st.textContent = '비밀번호가 올바르지 않습니다'; return; }
+    const data = await res.json();
+    if (!data.ok) { st.textContent = '불러오기 실패 (저장소 오류)'; return; }
+    try { localStorage.setItem('adminKey', key); } catch (e) {}
+    document.getElementById('backupPwWrap').style.display = 'none';
+    backupData = data.responses || [];
+    const partial = backupData.filter(r => r.partial).length;
+    st.textContent = '저장된 응답 ' + backupData.length + '건 (완료 ' + (backupData.length - partial) + ' · 중도종료 ' + partial + ')';
+    btn.textContent = backupData.length ? 'CSV 내려받기' : '닫기';
+    if (!backupData.length) btn.onclick = closeBackupModal; else btn.onclick = backupAction;
+  } catch (e) {
+    st.textContent = '불러오기 실패 (네트워크)';
+  } finally { btn.disabled = false; }
+}
+function backupCell(v) {
+  if (v == null) return '';
+  if (Array.isArray(v)) return v.map(x => x == null ? '' : x).join('|');
+  if (typeof v === 'object') return Object.keys(v).sort((a, b) => a - b).map(k => v[k] == null ? '' : v[k]).join('|');
+  return String(v);
+}
+function downloadBackupCsv() {
+  const rows = (backupData || []).slice().sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)));
+  if (!rows.length) return;
+  const qmap = {};
+  rows.forEach(r => Object.keys(r.answers || {}).forEach(k => { const a = r.answers[k] || {}; if (!qmap[k]) qmap[k] = (a.questionId || ('Q' + k)) + '. ' + (a.text || ''); }));
+  const qkeys = Object.keys(qmap).sort((a, b) => a - b);
+  const esc = v => { const s = String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const kst = t => { const d = new Date(new Date(t).getTime() + 9 * 3600000); return isNaN(d) ? '' : d.toISOString().replace('T', ' ').slice(0, 19); };
+  const lines = [['수신시각(KST)', '구분'].concat(qkeys.map(k => qmap[k])).map(esc).join(',')];
+  rows.forEach(r => lines.push([kst(r.receivedAt), r.partial ? '중도종료' : '완료'].concat(qkeys.map(k => backupCell(((r.answers || {})[k] || {}).answer))).map(esc).join(',')));
+  const s = getSurveys()[backupId];
+  const name = ((s && s.title) || backupId).replace(/[\\/:*?"<>|]/g, '_') + '_백업응답_' + kst(new Date()).slice(0, 10) + '.csv';
+  const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 function toggleTheme() {

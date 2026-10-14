@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const ADMIN_HASH = 'f60e07fc2e9aeaec05f061f6fff3a56caa006221484f7c032ee229d8d669ae05';
 
 async function readJson(pathname) {
-  const r = await get(pathname, { access: 'private', useCache: false });
+  const r = await get(pathname, { access: 'private' });
   if (!r || r.statusCode !== 200 || !r.stream) return null;
   const text = await new Response(r.stream).text();
   try { return JSON.parse(text); } catch (e) { return null; }
